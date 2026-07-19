@@ -1,0 +1,370 @@
+@inject CamusSessionService Session
+@inject SchemaExplorerService Schema
+@inject ISnackbar Snackbar
+@implements IDisposable
+
+<aside class="schema-drawer">
+    <div class="schema-drawer-header">
+        <MudTextField @bind-Value="_filter"
+                      Placeholder="Filter…"
+                      Variant="Variant.Outlined"
+                      Margin="Margin.Dense"
+                      Adornment="Adornment.Start"
+                      AdornmentIcon="@Icons.Material.Filled.Search"
+                      Immediate="true"
+                      Class="schema-filter" />
+        <div class="d-flex justify-space-between align-center mt-2">
+            <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                @StatusLabel
+            </MudText>
+            <MudIconButton Icon="@Icons.Material.Filled.Refresh"
+                           Size="Size.Small"
+                           Disabled="!Session.IsConnected || _loading"
+                           OnClick="RefreshAsync"
+                           aria-label="Refresh schema" />
+        </div>
+    </div>
+
+    <div class="schema-tree">
+        @if (!Session.IsConnected)
+        {
+            <div class="empty-state">Connect via Configure to browse schema.</div>
+        }
+        else if (_loading && _databases.Count == 0)
+        {
+            <div class="empty-state"><MudProgressCircular Indeterminate="true" Size="Size.Small" /></div>
+        }
+        else if (_error is not null)
+        {
+            <div class="empty-state" style="color: var(--camus-danger);">@_error</div>
+        }
+        else if (_databases.Count == 0)
+        {
+            <div class="empty-state">No databases.</div>
+        }
+        else
+        {
+            @foreach (DbEntry db in VisibleDatabases)
+            {
+                bool isActive = IsActiveDatabase(db);
+                <div class="schema-node schema-db @(isActive ? "active" : null)"
+                     @onclick="() => SelectDatabaseAsync(db)"
+                     title="@(isActive ? "Active database" : "Click to use this database")">
+                    <button type="button"
+                            class="schema-expand-btn"
+                            title="@(db.Expanded ? "Collapse" : "Expand")"
+                            @onclick="() => ToggleDatabaseExpandAsync(db)"
+                            @onclick:stopPropagation="true">
+                        <MudIcon Icon="@(db.Expanded ? Icons.Material.Filled.ExpandMore : Icons.Material.Filled.ChevronRight)"
+                                 Size="Size.Small" />
+                    </button>
+                    <MudIcon Icon="@Icons.Material.Filled.Storage" Size="Size.Small" Class="@(isActive ? "schema-db-icon-active" : null)" />
+                    <span class="schema-db-name">@db.Name</span>
+                    <span class="schema-node-detail">@db.Tables.Count</span>
+                    @if (isActive)
+                    {
+                        <span class="schema-db-badge">active</span>
+                    }
+                </div>
+
+                @if (db.Expanded)
+                {
+                    <div class="schema-children">
+                        @if (db.Loading)
+                        {
+                            <div class="schema-node mud-text-secondary">Loading…</div>
+                        }
+                        else if (db.Tables.Count == 0)
+                        {
+                            <div class="schema-node mud-text-secondary">(no tables)</div>
+                        }
+                        else
+                        {
+                            @foreach (TableEntry table in VisibleTables(db))
+                            {
+                                <div class="schema-node"
+                                     @onclick="() => ToggleTableAsync(db, table)"
+                                     @ondblclick="() => InsertSelectAsync(table.Name)"
+                                     @ondblclick:stopPropagation="true">
+                                    <MudIcon Icon="@(table.Expanded ? Icons.Material.Filled.ExpandMore : Icons.Material.Filled.ChevronRight)"
+                                             Size="Size.Small" />
+                                    <MudIcon Icon="@Icons.Material.Filled.TableChart" Size="Size.Small" />
+                                    <span>@table.Name</span>
+                                </div>
+
+                                @if (table.Expanded)
+                                {
+                                    <div class="schema-children">
+                                        @if (table.Loading)
+                                        {
+                                            <div class="schema-node mud-text-secondary">Loading…</div>
+                                        }
+                                        else
+                                        {
+                                            @foreach (ColumnSchemaInfo col in table.Columns)
+                                            {
+                                                <div class="schema-node">
+                                                    <span style="width:20px;display:inline-block;"></span>
+                                                    <MudIcon Icon="@Icons.Material.Filled.DataObject" Size="Size.Small" />
+                                                    <span>@col.Name</span>
+                                                    @if (!string.IsNullOrEmpty(col.Type))
+                                                    {
+                                                        <span class="schema-node-detail">@col.Type</span>
+                                                    }
+                                                </div>
+                                            }
+                                            @foreach (IndexSchemaInfo idx in table.Indexes)
+                                            {
+                                                <div class="schema-node">
+                                                    <span style="width:20px;display:inline-block;"></span>
+                                                    <MudIcon Icon="@Icons.Material.Filled.Key" Size="Size.Small" />
+                                                    <span>@idx.Name</span>
+                                                    @if (!string.IsNullOrEmpty(idx.Columns))
+                                                    {
+                                                        <span class="schema-node-detail">@idx.Columns</span>
+                                                    }
+                                                </div>
+                                            }
+                                            @if (table.Columns.Count == 0 && table.Indexes.Count == 0)
+                                            {
+                                                <div class="schema-node mud-text-secondary">(no columns)</div>
+                                            }
+                                        }
+                                    </div>
+                                }
+                            }
+                        }
+                    </div>
+                }
+            }
+        }
+    </div>
+</aside>
+
+@code {
+    [Parameter]
+    public EventCallback<string> OnInsertSql { get; set; }
+
+    private readonly List<DbEntry> _databases = [];
+    private string _filter = "";
+    private bool _loading;
+    private bool _wasConnected;
+    private string? _error;
+
+    private string StatusLabel =>
+        _databases.Count == 0
+            ? (_loading ? "Loading…" : "Not loaded")
+            : $"Databases ({_databases.Count})";
+
+    private IEnumerable<DbEntry> VisibleDatabases =>
+        string.IsNullOrWhiteSpace(_filter)
+            ? _databases
+            : _databases.Where(db =>
+                db.Name.Contains(_filter, StringComparison.OrdinalIgnoreCase)
+                || db.Tables.Any(t => t.Name.Contains(_filter, StringComparison.OrdinalIgnoreCase)));
+
+    protected override void OnInitialized()
+    {
+        Session.Changed += OnSessionChanged;
+        _wasConnected = Session.IsConnected;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && Session.IsConnected && _databases.Count == 0 && !_loading)
+            await RefreshAsync();
+    }
+
+    private async void OnSessionChanged()
+    {
+        await InvokeAsync(async () =>
+        {
+            bool connected = Session.IsConnected;
+            if (connected && !_wasConnected)
+                await RefreshAsync();
+            else if (!connected)
+            {
+                _databases.Clear();
+                _error = null;
+                StateHasChanged();
+            }
+            else
+            {
+                StateHasChanged();
+            }
+
+            _wasConnected = connected;
+        });
+    }
+
+    private async Task RefreshAsync()
+    {
+        if (!Session.IsConnected || _loading)
+            return;
+
+        _loading = true;
+        _error = null;
+        StateHasChanged();
+
+        try
+        {
+            IReadOnlyList<string> names = await Schema.ListDatabasesAsync();
+            List<DbEntry> next = names.Select(n => new DbEntry { Name = n }).ToList();
+
+            string focus = Session.Database;
+            DbEntry? focusDb = next.FirstOrDefault(d =>
+                    string.Equals(d.Name, focus, StringComparison.OrdinalIgnoreCase))
+                ?? next.FirstOrDefault();
+
+            if (focusDb is not null)
+            {
+                await LoadTablesAsync(focusDb, activate: false);
+                focusDb.Expanded = true;
+            }
+
+            _databases.Clear();
+            _databases.AddRange(next);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            Snackbar.Add($"Schema refresh failed: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task SelectDatabaseAsync(DbEntry db)
+    {
+        try
+        {
+            await Session.ChangeDatabaseAsync(db.Name, notify: true);
+            db.Expanded = true;
+            if (!db.Loaded)
+                await LoadTablesAsync(db, activate: false);
+            else
+                StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    private async Task ToggleDatabaseExpandAsync(DbEntry db)
+    {
+        if (db.Expanded)
+        {
+            db.Expanded = false;
+            return;
+        }
+
+        db.Expanded = true;
+        if (!db.Loaded)
+            await LoadTablesAsync(db, activate: true);
+    }
+
+    private async Task ToggleTableAsync(DbEntry db, TableEntry table)
+    {
+        if (table.Expanded)
+        {
+            table.Expanded = false;
+            return;
+        }
+
+        table.Expanded = true;
+        if (!table.Loaded)
+            await LoadTableDetailsAsync(db, table);
+    }
+
+    /// <param name="activate">
+    /// When true, switching to <paramref name="db"/> for SHOW TABLES also becomes the session database
+    /// (used when expanding a closed DB). When false, caller already activated it.
+    /// </param>
+    private async Task LoadTablesAsync(DbEntry db, bool activate)
+    {
+        db.Loading = true;
+        StateHasChanged();
+        try
+        {
+            await Session.ChangeDatabaseAsync(db.Name, notify: activate);
+            IReadOnlyList<string> tables = await Schema.ListTablesAsync();
+            db.Tables = tables
+                .Select(t => new TableEntry { Name = t })
+                .ToList();
+            db.Loaded = true;
+        }
+        catch (Exception ex)
+        {
+            db.Expanded = false;
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+        finally
+        {
+            db.Loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task LoadTableDetailsAsync(DbEntry db, TableEntry table)
+    {
+        table.Loading = true;
+        StateHasChanged();
+        try
+        {
+            // Ensure queries run against this table's database without forcing a full UI refresh.
+            await Session.ChangeDatabaseAsync(db.Name, notify: true);
+            table.Columns = (await Schema.ListColumnsAsync(table.Name)).ToList();
+            table.Indexes = (await Schema.ListIndexesAsync(table.Name)).ToList();
+            table.Loaded = true;
+        }
+        catch (Exception ex)
+        {
+            table.Expanded = false;
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+        finally
+        {
+            table.Loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private bool IsActiveDatabase(DbEntry db) =>
+        string.Equals(db.Name, Session.Database, StringComparison.OrdinalIgnoreCase);
+
+    private IEnumerable<TableEntry> VisibleTables(DbEntry db)
+    {
+        if (string.IsNullOrWhiteSpace(_filter))
+            return db.Tables;
+
+        return db.Tables.Where(t => t.Name.Contains(_filter, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private Task InsertSelectAsync(string table) =>
+        OnInsertSql.InvokeAsync($"SELECT * FROM {table} LIMIT 100");
+
+    public void Dispose() => Session.Changed -= OnSessionChanged;
+
+    private sealed class DbEntry
+    {
+        public required string Name { get; init; }
+        public bool Expanded { get; set; }
+        public bool Loaded { get; set; }
+        public bool Loading { get; set; }
+        public List<TableEntry> Tables { get; set; } = [];
+    }
+
+    private sealed class TableEntry
+    {
+        public required string Name { get; init; }
+        public bool Expanded { get; set; }
+        public bool Loaded { get; set; }
+        public bool Loading { get; set; }
+        public List<ColumnSchemaInfo> Columns { get; set; } = [];
+        public List<IndexSchemaInfo> Indexes { get; set; } = [];
+    }
+}

@@ -1,0 +1,5 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/CamusDB.WebConsole/CamusDB.WebConsole.csproj" />
+  </Folder>
+</Solution>

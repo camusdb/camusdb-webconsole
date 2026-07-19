@@ -1,0 +1,268 @@
+@inject CamusSessionService Session
+@inject QueryExecutionService Queries
+@inject ISnackbar Snackbar
+@implements IDisposable
+
+<div class="query-workspace">
+    <div class="query-tabs">
+        @foreach (QueryTab tab in _tabs)
+        {
+            <div class="query-tab @(tab.Id == _activeId ? "active" : null)"
+                 @onclick="() => ActivateAsync(tab.Id)"
+                 role="tab"
+                 aria-selected="@(tab.Id == _activeId)">
+                <span class="query-tab-title">@tab.Title</span>
+                @if (_tabs.Count > 1)
+                {
+                    <button type="button"
+                            class="query-tab-close"
+                            title="Close tab"
+                            @onclick="() => CloseTabAsync(tab.Id)"
+                            @onclick:stopPropagation="true">
+                        ×
+                    </button>
+                }
+            </div>
+        }
+        <button type="button"
+                class="query-tab-add"
+                title="New query tab"
+                @onclick="AddTabAsync">
+            +
+        </button>
+    </div>
+
+    <div class="query-split">
+        <div class="query-editor-pane" style="@($"height:{_editorHeight}px")">
+            <div class="query-editor-toolbar">
+                @if (_running)
+                {
+                    <MudButton Variant="Variant.Outlined"
+                               Size="Size.Small"
+                               Color="Color.Error"
+                               StartIcon="@Icons.Material.Filled.Stop"
+                               OnClick="CancelRun">
+                        Stop
+                    </MudButton>
+                }
+                <MudButton Variant="Variant.Filled"
+                           Size="Size.Small"
+                           Class="run-btn"
+                           StartIcon="@Icons.Material.Filled.PlayArrow"
+                           Disabled="_running || !Session.IsConnected"
+                           OnClick="RunAsync">
+                    Run query
+                </MudButton>
+            </div>
+            @if (ActiveTab is not null)
+            {
+                <div style="flex:1; min-height:0;" @key="ActiveTab.Id">
+                    <QueryEditor @ref="_editor"
+                                 EditorId="@($"sql-editor-{ActiveTab.Id}")"
+                                 @bind-Value="ActiveTab.Sql"
+                                 OnRunRequested="RunAsync" />
+                </div>
+            }
+        </div>
+
+        <div class="split-handle"
+             @onpointerdown="OnSplitPointerDown"></div>
+
+        @if (_splitting)
+        {
+            <div class="split-overlay"
+                 @onpointermove="OnSplitPointerMove"
+                 @onpointerup="OnSplitPointerUp"
+                 @onpointercancel="OnSplitPointerUp"></div>
+        }
+
+        <div class="results-pane" @key="@($"results-{_activeId}")">
+            <ExecutionStatusBar Result="ActiveTab?.LastResult" />
+            <ResultsGrid Result="ActiveTab?.LastResult" />
+        </div>
+    </div>
+</div>
+
+@code {
+    private readonly List<QueryTab> _tabs = [];
+    private string _activeId = "";
+    private QueryEditor? _editor;
+    private bool _running;
+    private CancellationTokenSource? _cts;
+    private int _editorHeight = 220;
+    private bool _splitting;
+    private double _splitStartY;
+    private int _splitStartHeight;
+    private int _tabSeq = 1;
+
+    private QueryTab? ActiveTab => _tabs.FirstOrDefault(t => t.Id == _activeId);
+
+    protected override void OnInitialized()
+    {
+        Session.Changed += OnSessionChanged;
+        AddTabCore(selectSql: "SELECT 1");
+    }
+
+    public async Task InsertSqlAsync(string sql)
+    {
+        await PersistActiveEditorAsync();
+
+        if (ActiveTab is null)
+            AddTabCore(selectSql: sql);
+        else
+        {
+            ActiveTab.Sql = sql;
+            ActiveTab.Title = TruncateTitle(sql);
+        }
+
+        StateHasChanged();
+    }
+
+    private void OnSessionChanged() => InvokeAsync(StateHasChanged);
+
+    private async Task AddTabAsync()
+    {
+        await PersistActiveEditorAsync();
+        AddTabCore(selectSql: "");
+    }
+
+    private void AddTabCore(string selectSql)
+    {
+        var tab = new QueryTab
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Title = string.IsNullOrWhiteSpace(selectSql) ? $"SQL {_tabSeq}" : TruncateTitle(selectSql),
+            Sql = selectSql,
+        };
+        _tabSeq++;
+        _tabs.Add(tab);
+        _activeId = tab.Id;
+    }
+
+    private async Task ActivateAsync(string id)
+    {
+        if (id == _activeId)
+            return;
+
+        await PersistActiveEditorAsync();
+        _activeId = id;
+    }
+
+    private async Task CloseTabAsync(string id)
+    {
+        if (_tabs.Count <= 1)
+            return;
+
+        if (id == _activeId)
+            await PersistActiveEditorAsync();
+
+        int index = _tabs.FindIndex(t => t.Id == id);
+        if (index < 0)
+            return;
+
+        _tabs.RemoveAt(index);
+        if (_activeId == id)
+            _activeId = _tabs[Math.Clamp(index, 0, _tabs.Count - 1)].Id;
+    }
+
+    private async Task PersistActiveEditorAsync()
+    {
+        if (_editor is null || ActiveTab is null)
+            return;
+
+        try
+        {
+            await _editor.SyncValueAsync();
+        }
+        catch
+        {
+            // Editor may already be disposed while switching tabs.
+        }
+    }
+
+    private async Task RunAsync()
+    {
+        if (ActiveTab is null || _running)
+            return;
+
+        if (!Session.IsConnected)
+        {
+            Snackbar.Add("Not connected. Open Configure to connect.", Severity.Warning);
+            return;
+        }
+
+        await PersistActiveEditorAsync();
+
+        string sql = ActiveTab.Sql?.Trim() ?? "";
+        if (sql.Length == 0)
+        {
+            Snackbar.Add("SQL is empty.", Severity.Warning);
+            return;
+        }
+
+        ActiveTab.Title = TruncateTitle(sql);
+        _running = true;
+        _cts = new CancellationTokenSource();
+        StateHasChanged();
+
+        try
+        {
+            QueryResultModel result = await Queries.ExecuteAsync(sql, _cts.Token);
+            ActiveTab.LastResult = result;
+            if (!result.Success)
+                Snackbar.Add(result.ErrorMessage ?? "Query failed", Severity.Error);
+        }
+        finally
+        {
+            _running = false;
+            _cts?.Dispose();
+            _cts = null;
+            StateHasChanged();
+        }
+    }
+
+    private void CancelRun() => _cts?.Cancel();
+
+    private void OnSplitPointerDown(PointerEventArgs e)
+    {
+        _splitting = true;
+        _splitStartY = e.ClientY;
+        _splitStartHeight = _editorHeight;
+    }
+
+    private void OnSplitPointerMove(PointerEventArgs e)
+    {
+        if (!_splitting)
+            return;
+
+        int next = _splitStartHeight + (int)(e.ClientY - _splitStartY);
+        int clamped = Math.Clamp(next, 120, 700);
+        if (clamped != _editorHeight)
+            _editorHeight = clamped;
+    }
+
+    private void OnSplitPointerUp(PointerEventArgs e) => _splitting = false;
+
+    private static string TruncateTitle(string sql)
+    {
+        string oneLine = sql.Replace('\n', ' ').Replace('\r', ' ').Trim();
+        if (oneLine.Length == 0)
+            return "SQL";
+        return oneLine.Length <= 28 ? oneLine : oneLine[..28] + "…";
+    }
+
+    public void Dispose()
+    {
+        Session.Changed -= OnSessionChanged;
+        _cts?.Cancel();
+        _cts?.Dispose();
+    }
+
+    private sealed class QueryTab
+    {
+        public required string Id { get; init; }
+        public string Title { get; set; } = "SQL";
+        public string Sql { get; set; } = "";
+        public QueryResultModel? LastResult { get; set; }
+    }
+}

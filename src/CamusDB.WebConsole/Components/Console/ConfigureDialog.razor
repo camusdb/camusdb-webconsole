@@ -1,0 +1,99 @@
+@inject CamusSessionService Session
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <TitleContent>
+        <MudText Typo="Typo.h6">Configure connection</MudText>
+    </TitleContent>
+    <DialogContent>
+        <MudStack Spacing="3" Class="mt-2">
+            <MudTextField @bind-Value="_endpoint"
+                          Label="Endpoint"
+                          Variant="Variant.Outlined"
+                          Immediate="true"
+                          HelperText="e.g. http://localhost:5095 (REST) or http://localhost:5096 (gRPC)" />
+            <MudTextField @bind-Value="_database"
+                          Label="Database"
+                          Variant="Variant.Outlined"
+                          Immediate="true" />
+            <MudSelect T="string" @bind-Value="_protocol" Label="Protocol" Variant="Variant.Outlined">
+                <MudSelectItem Value="@("rest")">REST</MudSelectItem>
+                <MudSelectItem Value="@("grpc")">gRPC</MudSelectItem>
+            </MudSelect>
+            <MudNumericField @bind-Value="_timeoutSeconds"
+                             Label="Timeout (seconds)"
+                             Variant="Variant.Outlined"
+                             Min="1"
+                             Max="600" />
+            <MudNumericField @bind-Value="_maxRows"
+                             Label="Max result rows"
+                             Variant="Variant.Outlined"
+                             Min="1"
+                             Max="100000" />
+            @if (!string.IsNullOrEmpty(_error))
+            {
+                <MudAlert Severity="Severity.Error" Dense="true">@_error</MudAlert>
+            }
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel" Disabled="_busy">Cancel</MudButton>
+        <MudButton Color="Color.Primary"
+                   Variant="Variant.Filled"
+                   OnClick="ConnectAsync"
+                   Disabled="_busy"
+                   Class="run-btn">
+            @(_busy ? "Connecting…" : "Connect")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter]
+    private IMudDialogInstance MudDialog { get; set; } = null!;
+
+    private string _endpoint = "";
+    private string _database = "";
+    private string _protocol = "rest";
+    private int _timeoutSeconds = 30;
+    private int _maxRows = 1000;
+    private string? _error;
+    private bool _busy;
+
+    protected override void OnInitialized()
+    {
+        _endpoint = Session.Endpoint;
+        _database = Session.Database;
+        _protocol = Session.Protocol;
+        _timeoutSeconds = Session.TimeoutSeconds;
+        _maxRows = Session.MaxRows;
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private async Task ConnectAsync()
+    {
+        _busy = true;
+        _error = null;
+        try
+        {
+            await Session.ConfigureAndConnectAsync(
+                _endpoint,
+                _database,
+                _protocol,
+                _timeoutSeconds,
+                _maxRows);
+
+            Snackbar.Add($"Connected to {Session.Database} @ {Session.Endpoint}", Severity.Success);
+            MudDialog.Close(DialogResult.Ok(true));
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

@@ -1,0 +1,97 @@
+<div class="query-editor-host" style="height: 100%;">
+    <StandaloneCodeEditor @ref="_editor"
+                          Id="@EditorId"
+                          ConstructionOptions="ConstructionOptions"
+                          OnDidInit="OnDidInitAsync"
+                          CssClass="sql-monaco" />
+</div>
+
+@code {
+    [Parameter]
+    public string EditorId { get; set; } = "sql-editor";
+
+    [Parameter]
+    public string Value { get; set; } = "";
+
+    [Parameter]
+    public EventCallback<string> ValueChanged { get; set; }
+
+    [Parameter]
+    public EventCallback OnRunRequested { get; set; }
+
+    private StandaloneCodeEditor? _editor;
+    private bool _ready;
+    private string _lastSet = "";
+
+    private StandaloneEditorConstructionOptions ConstructionOptions(StandaloneCodeEditor _)
+    {
+        return new StandaloneEditorConstructionOptions
+        {
+            AutomaticLayout = true,
+            Language = "sql",
+            Theme = "vs-dark",
+            Value = Value ?? "",
+            Minimap = new EditorMinimapOptions { Enabled = false },
+            FontFamily = "IBM Plex Mono, Menlo, Consolas, monospace",
+            FontSize = 13,
+            LineNumbers = "on",
+            ScrollBeyondLastLine = false,
+            WordWrap = "on",
+            TabSize = 2,
+            RenderLineHighlight = "line",
+            Padding = new EditorPaddingOptions { Top = 8, Bottom = 8 },
+        };
+    }
+
+    private async Task OnDidInitAsync()
+    {
+        _ready = true;
+        _lastSet = Value ?? "";
+
+        if (_editor is not null)
+        {
+            await _editor.AddCommand((int)KeyMod.CtrlCmd | (int)KeyCode.Enter, async _ =>
+            {
+                await SyncValueAsync();
+                await OnRunRequested.InvokeAsync();
+            });
+        }
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (!_ready || _editor is null)
+            return;
+
+        string next = Value ?? "";
+        if (next == _lastSet)
+            return;
+
+        string current = await _editor.GetValue();
+        if (current == next)
+        {
+            _lastSet = next;
+            return;
+        }
+
+        await _editor.SetValue(next);
+        _lastSet = next;
+    }
+
+    public async Task<string> GetValueAsync()
+    {
+        if (_editor is null || !_ready)
+            return Value ?? "";
+
+        string value = await _editor.GetValue();
+        _lastSet = value;
+        return value;
+    }
+
+    public async Task SyncValueAsync()
+    {
+        string value = await GetValueAsync();
+        if (value != Value)
+            await ValueChanged.InvokeAsync(value);
+    }
+}

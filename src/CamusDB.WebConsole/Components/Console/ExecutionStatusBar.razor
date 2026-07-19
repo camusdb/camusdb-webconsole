@@ -1,0 +1,62 @@
+@if (Result is null)
+{
+    <div class="status-bar">Ready. Press Run query or Ctrl/Cmd+Enter.</div>
+}
+else if (!Result.Success)
+{
+    <div class="status-bar error">
+        <MudIcon Icon="@Icons.Material.Filled.Error" Size="Size.Small" Color="Color.Error" />
+        @if (!string.IsNullOrEmpty(Result.ErrorCode))
+        {
+            <span>[@Result.ErrorCode]</span>
+        }
+        <span>@Result.ErrorMessage</span>
+        <span>Total: @Format(Result.TotalDuration)</span>
+    </div>
+}
+else
+{
+    <div class="status-bar success">
+        <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Size="Size.Small" Class="status-ok" />
+        @if (Result.IsResultSet)
+        {
+            <span>@Result.RowsReturned.ToString("N0") row@(Result.RowsReturned == 1 ? "" : "s")</span>
+        }
+        else if (Result.RowsAffected is int affected)
+        {
+            <span>@affected row@(affected == 1 ? "" : "s") affected</span>
+        }
+        <span>Execute: @Format(Result.ExecuteDuration)</span>
+        <span>Total: @Format(Result.TotalDuration)</span>
+        @if (Result.IsResultSet && Result.RowsReturned > 0)
+        {
+            <span>Count: @PerRow(Result)</span>
+        }
+        @if (!string.IsNullOrEmpty(Result.Message))
+        {
+            <span>@Result.Message</span>
+        }
+    </div>
+}
+
+@code {
+    [Parameter]
+    public QueryResultModel? Result { get; set; }
+
+    private static string Format(TimeSpan t)
+    {
+        if (t.TotalMilliseconds < 1)
+            return $"{t.TotalMicroseconds:0.##}μs";
+        if (t.TotalSeconds < 1)
+            return $"{t.TotalMilliseconds:0.##}ms";
+        return $"{t.TotalSeconds:0.###}s";
+    }
+
+    private static string PerRow(QueryResultModel result)
+    {
+        if (result.RowsReturned <= 0)
+            return "—";
+        double us = result.ExecuteDuration.TotalMicroseconds / result.RowsReturned;
+        return $"{us:0.##}μs / row";
+    }
+}

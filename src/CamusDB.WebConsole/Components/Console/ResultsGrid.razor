@@ -1,0 +1,99 @@
+@if (Result is null)
+{
+    <div class="empty-state">Run a query to see results.</div>
+}
+else if (!Result.Success)
+{
+    <div class="empty-state">Query failed.</div>
+}
+else if (!Result.IsResultSet)
+{
+    <div class="empty-state">@Result.Message</div>
+}
+else
+{
+    <div class="results-toolbar">
+        <span>
+            @Result.RowsReturned.ToString("N0") row@(Result.RowsReturned == 1 ? "" : "s")
+            @if (Result.Truncated)
+            {
+                <text> (truncated at @Result.MaxRows.ToString("N0"))</text>
+            }
+        </span>
+        <span>@Result.Columns.Count column@(Result.Columns.Count == 1 ? "" : "s")</span>
+    </div>
+    <div class="results-grid-wrap">
+        @if (Result.Columns.Count == 0)
+        {
+            <div class="empty-state">Empty result set (no columns).</div>
+        }
+        else
+        {
+            <table class="results-table">
+                <thead>
+                    <tr>
+                        @foreach (QueryColumn col in Result.Columns)
+                        {
+                            <th>
+                                @col.Name
+                                <span class="col-type">@col.TypeName</span>
+                            </th>
+                        }
+                    </tr>
+                </thead>
+                <tbody>
+                    <Virtualize Items="Result.Rows.ToList()" Context="row" ItemSize="28">
+                        <tr>
+                            @for (int i = 0; i < Result.Columns.Count; i++)
+                            {
+                                object? value = i < row.Length ? row[i] : null;
+                                <td class="@CellClass(Result.Columns[i], value)">@FormatCell(value)</td>
+                            }
+                        </tr>
+                    </Virtualize>
+                </tbody>
+            </table>
+        }
+    </div>
+}
+
+@code {
+    [Parameter]
+    public QueryResultModel? Result { get; set; }
+
+    private static string FormatCell(object? value)
+    {
+        if (value is null)
+            return "NULL";
+
+        return value switch
+        {
+            DateTime dt => dt.ToString("yyyy-MM-dd HH:mm:ss.fff"),
+            DateOnly d => d.ToString("yyyy-MM-dd"),
+            byte[] bytes => $"0x{Convert.ToHexString(bytes)}",
+            bool b => b ? "true" : "false",
+            Array arr => $"[{string.Join(", ", arr.Cast<object?>().Select(FormatCell))}]",
+            _ => Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture) ?? "",
+        };
+    }
+
+    private static string CellClass(QueryColumn column, object? value)
+    {
+        if (value is null)
+            return "cell-null";
+
+        string type = column.TypeName ?? "";
+        if (value is DateTime or DateOnly
+            || type.Contains("date", StringComparison.OrdinalIgnoreCase)
+            || type.Contains("time", StringComparison.OrdinalIgnoreCase))
+            return "cell-timestamp";
+
+        if (value is bool)
+            return "cell-bool";
+
+        if (value is sbyte or byte or short or ushort or int or uint or long or ulong or float or double or decimal)
+            return "cell-number";
+
+        return "";
+    }
+}

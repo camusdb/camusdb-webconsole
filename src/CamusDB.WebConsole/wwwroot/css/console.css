@@ -1,0 +1,502 @@
+:root {
+    --camus-bg: #1a1c1e;
+    --camus-surface: #212427;
+    --camus-surface-2: #2a2d31;
+    --camus-border: #3a3f45;
+    --camus-text: #e8eaed;
+    --camus-muted: #9aa0a6;
+    --camus-green: #2ecc71;
+    --camus-green-dim: #1e9e55;
+    --camus-pink: #e91e8c;
+    --camus-timestamp: #5cdb95;
+    --camus-accent: #4ea1ff;
+    --camus-danger: #ef5350;
+    --camus-font: "IBM Plex Sans", "Segoe UI", sans-serif;
+    --camus-mono: "IBM Plex Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+}
+
+html, body {
+    height: 100%;
+    margin: 0;
+    background: var(--camus-bg);
+    color: var(--camus-text);
+    font-family: var(--camus-font);
+}
+
+.console-shell {
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    background: var(--camus-bg);
+    overflow: hidden;
+}
+
+.console-body {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    overflow: hidden;
+}
+
+.console-main {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.schema-drawer {
+    width: 280px;
+    min-width: 220px;
+    max-width: 420px;
+    height: 100%;
+    align-self: stretch;
+    border-right: 1px solid var(--camus-border);
+    background: var(--camus-surface);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.schema-tree {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 8px 4px 16px;
+}
+
+.console-appbar {
+    flex-shrink: 0;
+}
+
+.schema-drawer-header {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--camus-border);
+    flex-shrink: 0;
+    position: relative;
+    z-index: 1;
+    background: var(--camus-surface);
+}
+
+.schema-filter {
+    width: 100%;
+}
+
+.schema-node {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.875rem;
+    user-select: none;
+}
+
+.schema-node:hover {
+    background: var(--camus-surface-2);
+}
+
+.schema-node.active,
+.schema-db.active {
+    background: rgba(46, 204, 113, 0.14);
+    color: var(--camus-text);
+    box-shadow: inset 3px 0 0 var(--camus-green);
+}
+
+.schema-db-name {
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.schema-db.active .schema-db-name {
+    font-weight: 650;
+    color: var(--camus-green);
+}
+
+.schema-db-icon-active {
+    color: var(--camus-green) !important;
+}
+
+.schema-db-badge {
+    margin-left: 4px;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 0.65rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #0b1a10;
+    background: var(--camus-green);
+    flex-shrink: 0;
+}
+
+.schema-expand-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: none;
+    border-radius: 3px;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+.schema-expand-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.schema-node .mud-icon-root {
+    font-size: 1rem;
+    color: var(--camus-muted);
+}
+
+.schema-node-detail {
+    color: var(--camus-muted);
+    font-size: 0.75rem;
+    margin-left: auto;
+    font-family: var(--camus-mono);
+}
+
+.schema-children {
+    margin-left: 14px;
+    border-left: 1px solid var(--camus-border);
+    padding-left: 4px;
+}
+
+.query-workspace {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.query-tabs {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 8px 0;
+    border-bottom: 1px solid var(--camus-border);
+    background: var(--camus-surface);
+    min-height: 36px;
+    overflow-x: auto;
+}
+
+.query-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 12px;
+    border: 1px solid transparent;
+    border-bottom: none;
+    border-radius: 4px 4px 0 0;
+    background: transparent;
+    color: var(--camus-muted);
+    cursor: pointer;
+    font-size: 0.8125rem;
+    max-width: 200px;
+    flex-shrink: 0;
+}
+
+.query-tab:hover {
+    color: var(--camus-text);
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.query-tab.active {
+    background: var(--camus-bg);
+    color: var(--camus-text);
+    border-color: var(--camus-border);
+    border-bottom: 1px solid var(--camus-bg);
+    margin-bottom: -1px;
+    font-weight: 600;
+    box-shadow: inset 0 2px 0 var(--camus-green);
+}
+
+.query-tab-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.query-tab-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border: none;
+    border-radius: 3px;
+    background: transparent;
+    color: var(--camus-muted);
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0;
+    flex-shrink: 0;
+}
+
+.query-tab-close:hover {
+    background: var(--camus-surface-2);
+    color: var(--camus-text);
+}
+
+.query-tab.active .query-tab-close:hover {
+    background: var(--camus-surface-2);
+    color: var(--camus-danger);
+}
+
+.query-tab-add {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    margin-left: 2px;
+    border: 1px dashed var(--camus-border);
+    border-radius: 4px;
+    background: transparent;
+    color: var(--camus-muted);
+    font-size: 18px;
+    line-height: 1;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+.query-tab-add:hover {
+    color: var(--camus-green);
+    border-color: var(--camus-green);
+    background: rgba(46, 204, 113, 0.08);
+}
+
+.query-split {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.query-editor-pane {
+    display: flex;
+    flex-direction: column;
+    min-height: 120px;
+    border-bottom: 1px solid var(--camus-border);
+    background: var(--camus-bg);
+}
+
+.query-editor-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 6px 10px;
+    background: var(--camus-surface);
+    border-bottom: 1px solid var(--camus-border);
+}
+
+.query-editor-host {
+    flex: 1;
+    min-height: 0;
+}
+
+.query-editor-host .monaco-editor-container,
+.query-editor-host .monaco-editor {
+    height: 100% !important;
+}
+
+.split-handle {
+    height: 8px;
+    cursor: row-resize;
+    background: var(--camus-surface);
+    border-top: 1px solid var(--camus-border);
+    border-bottom: 1px solid var(--camus-border);
+    flex-shrink: 0;
+    touch-action: none;
+    user-select: none;
+}
+
+.split-handle:hover,
+.split-handle:active {
+    background: var(--camus-green-dim);
+}
+
+.split-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    cursor: row-resize;
+    touch-action: none;
+    user-select: none;
+}
+
+.results-pane {
+    flex: 1;
+    min-height: 80px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: var(--camus-bg);
+}
+
+.status-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 6px 12px;
+    font-size: 0.8125rem;
+    font-family: var(--camus-mono);
+    border-bottom: 1px solid var(--camus-border);
+    background: var(--camus-surface);
+    color: var(--camus-muted);
+    flex-wrap: wrap;
+}
+
+.status-bar.success {
+    color: var(--camus-text);
+}
+
+.status-bar.error {
+    color: var(--camus-danger);
+}
+
+.status-ok {
+    color: var(--camus-green);
+}
+
+.results-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--camus-border);
+    font-size: 0.8125rem;
+    color: var(--camus-muted);
+}
+
+.results-grid-wrap {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+}
+
+.results-table {
+    width: max-content;
+    min-width: 100%;
+    border-collapse: collapse;
+    font-family: var(--camus-mono);
+    font-size: 0.8125rem;
+}
+
+.results-table th,
+.results-table td {
+    border-bottom: 1px solid var(--camus-border);
+    border-right: 1px solid var(--camus-border);
+    padding: 4px 10px;
+    white-space: nowrap;
+    text-align: left;
+    vertical-align: top;
+}
+
+.results-table th {
+    position: sticky;
+    top: 0;
+    background: var(--camus-surface-2);
+    z-index: 1;
+    font-weight: 500;
+}
+
+.results-table th .col-type {
+    display: block;
+    color: var(--camus-muted);
+    font-size: 0.7rem;
+    font-weight: 400;
+}
+
+.results-table tr:hover td {
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.cell-null {
+    color: var(--camus-muted);
+    font-style: italic;
+}
+
+.cell-timestamp {
+    color: var(--camus-timestamp);
+}
+
+.cell-number {
+    color: var(--camus-accent);
+}
+
+.cell-bool {
+    color: var(--camus-pink);
+}
+
+.console-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 12px;
+    border-top: 1px solid var(--camus-border);
+    background: var(--camus-surface);
+    font-size: 0.75rem;
+    color: var(--camus-muted);
+    flex-shrink: 0;
+}
+
+.conn-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+    margin-right: 6px;
+}
+
+.conn-dot.on {
+    background: var(--camus-green);
+    box-shadow: 0 0 6px var(--camus-green);
+}
+
+.conn-dot.off {
+    background: var(--camus-danger);
+}
+
+.app-bar-title {
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}
+
+.db-chip {
+    margin-left: 12px;
+    font-family: var(--camus-mono);
+    font-size: 0.8rem;
+}
+
+.run-btn {
+    background: var(--camus-green) !important;
+    color: #0b1a10 !important;
+    font-weight: 600 !important;
+}
+
+.configure-btn {
+    background: var(--camus-pink) !important;
+    color: #fff !important;
+}
+
+.empty-state {
+    padding: 24px;
+    color: var(--camus-muted);
+    text-align: center;
+}

@@ -1,0 +1,33 @@
+@inject CamusSessionService Session
+@implements IDisposable
+
+<footer class="console-footer">
+    <span>CamusDB Web Console</span>
+    <span>
+        <span class="conn-dot @(Session.IsConnected ? "on" : "off")"></span>
+        @(Session.IsConnected ? "Connected" : "Disconnected")
+        @if (!string.IsNullOrEmpty(Session.Endpoint))
+        {
+            <text> · @Session.Endpoint</text>
+        }
+        @if (Session.IsConnected && !string.IsNullOrEmpty(Session.ServerVersion))
+        {
+            <text> · v@authorSession.ServerVersion</text>
+        }
+        @if (!Session.IsConnected && !string.IsNullOrEmpty(Session.LastError))
+        {
+            <text> · @Session.LastError</text>
+        }
+    </span>
+</footer>
+
+@code {
+    protected override void OnInitialized()
+    {
+        Session.Changed += OnSessionChanged;
+    }
+
+    private void OnSessionChanged() => InvokeAsync(StateHasChanged);
+
+    public void Dispose() => Session.Changed -= OnSessionChanged;
+}

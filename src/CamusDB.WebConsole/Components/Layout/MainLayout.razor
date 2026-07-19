@@ -1,0 +1,91 @@
+﻿@inherits LayoutComponentBase
+@inject CamusSessionService Session
+@inject IDialogService DialogService
+@implements IDisposable
+
+<MudThemeProvider Theme="_theme" IsDarkMode="true" />
+<MudPopoverProvider />
+<MudDialogProvider />
+<MudSnackbarProvider />
+
+<div class="console-shell">
+    <MudAppBar Elevation="0"
+               Dense="true"
+               Fixed="false"
+               Class="console-appbar"
+               Style="background: var(--camus-surface); border-bottom: 1px solid var(--camus-border); position: relative; z-index: 20;">
+        <MudText Typo="Typo.subtitle1" Class="app-bar-title">CamusDB Web Console</MudText>
+        @if (!string.IsNullOrEmpty(Session.Database))
+        {
+            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Class="db-chip" Color="Color.Default">
+                @Session.Database
+            </MudChip>
+        }
+        <MudSpacer />
+        <MudButton Variant="Variant.Filled"
+                   Size="Size.Small"
+                   Class="configure-btn"
+                   StartIcon="@Icons.Material.Filled.Settings"
+                   OnClick="OpenConfigureAsync">
+            Configure
+        </MudButton>
+    </MudAppBar>
+
+    <div class="console-body">
+        @Body
+    </div>
+
+    <ConnectionFooter />
+</div>
+
+@code {
+    private readonly MudTheme _theme = new()
+    {
+        PaletteDark = new PaletteDark
+        {
+            Black = "#0f1113",
+            Background = "#1a1c1e",
+            Surface = "#212427",
+            DrawerBackground = "#212427",
+            AppbarBackground = "#212427",
+            TextPrimary = "#e8eaed",
+            TextSecondary = "#9aa0a6",
+            Primary = "#2ecc71",
+            Secondary = "#e91e8c",
+            Info = "#4ea1ff",
+            Success = "#2ecc71",
+            Error = "#ef5350",
+            Divider = "#3a3f45",
+            LinesDefault = "#3a3f45",
+        },
+        Typography = new Typography
+        {
+            Default = new DefaultTypography
+            {
+                FontFamily = ["IBM Plex Sans", "Segoe UI", "sans-serif"],
+            },
+        },
+    };
+
+    protected override void OnInitialized()
+    {
+        Session.Changed += OnSessionChanged;
+    }
+
+    private void OnSessionChanged() => InvokeAsync(StateHasChanged);
+
+    private async Task OpenConfigureAsync()
+    {
+        var options = new DialogOptions
+        {
+            CloseOnEscapeKey = true,
+            MaxWidth = MaxWidth.Small,
+            FullWidth = true,
+        };
+
+        IDialogReference dialog = await DialogService.ShowAsync<ConfigureDialog>("Configure connection", options);
+        await dialog.Result;
+    }
+
+    public void Dispose() => Session.Changed -= OnSessionChanged;
+}
