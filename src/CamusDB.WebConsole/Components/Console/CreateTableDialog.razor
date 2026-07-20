@@ -1,0 +1,166 @@
+@inject QueryExecutionService Queries
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <TitleContent>
+        <MudText Typo="Typo.h6">Create table</MudText>
+    </TitleContent>
+    <DialogContent>
+        <MudStack Spacing="3" Class="mt-2">
+            <MudText Typo="Typo.caption" Class="mud-text-secondary">Database: @_database</MudText>
+            <MudTextField @bind-Value="_tableName"
+                          Label="Table name"
+                          Variant="Variant.Outlined"
+                          Immediate="true" />
+
+            <MudText Typo="Typo.subtitle2">Columns</MudText>
+            @foreach (ColumnDraft col in _columns)
+            {
+                <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center">
+                    <MudTextField @bind-Value="col.Name"
+                                  Label="Name"
+                                  Variant="Variant.Outlined"
+                                  Immediate="true"
+                                  Style="flex:1; min-width:100px;" />
+                    <MudSelect T="string"
+                               @bind-Value="col.Type"
+                               Label="Type"
+                               Variant="Variant.Outlined"
+                               Style="width:140px;">
+                        @foreach (string t in SqlBuilder.ColumnTypes)
+                        {
+                            <MudSelectItem Value="@t">@t</MudSelectItem>
+                        }
+                    </MudSelect>
+                    <MudCheckBox @bind-Value="col.NotNull" Label="NOT NULL" Dense="true" />
+                    <MudCheckBox @bind-Value="col.PrimaryKey" Label="PK" Dense="true" />
+                    <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                                   Size="Size.Small"
+                                   Disabled="_columns.Count <= 1"
+                                   OnClick="() => RemoveColumn(col)"
+                                   aria-label="Remove column" />
+                </MudStack>
+            }
+
+            <MudButton Variant="Variant.Text"
+                       Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Add"
+                       OnClick="AddColumn">
+                Add column
+            </MudButton>
+
+            @if (!string.IsNullOrEmpty(_error))
+            {
+                <MudAlert Severity="Severity.Error" Dense="true">@_error</MudAlert>
+            }
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel" Disabled="_busy">Cancel</MudButton>
+        <MudButton Color="Color.Primary"
+                   Variant="Variant.Filled"
+                   OnClick="CreateAsync"
+                   Disabled="_busy"
+                   Class="run-btn">
+            @(_busy ? "Creating…" : "Create")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter]
+    private IMudDialogInstance MudDialog { get; set; } = null!;
+
+    [Parameter]
+    public string Database { get; set; } = "";
+
+    private string _database = "";
+    private string _tableName = "";
+    private readonly List<ColumnDraft> _columns = [];
+    private string? _error;
+    private bool _busy;
+
+    protected override void OnInitialized()
+    {
+        _database = Database;
+        _columns.Add(new ColumnDraft { Name = "id", Type = "OID", NotNull = true, PrimaryKey = true });
+        _columns.Add(new ColumnDraft { Name = "name", Type = "STRING", NotNull = true });
+    }
+
+    private void AddColumn() =>
+        _columns.Add(new ColumnDraft { Name = "", Type = "STRING" });
+
+    private void RemoveColumn(ColumnDraft col) => _columns.Remove(col);
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private async Task CreateAsync()
+    {
+        _error = null;
+
+        if (string.IsNullOrWhiteSpace(_tableName))
+        {
+            _error = "Table name is required.";
+            return;
+        }
+
+        List<(string Name, string Type, bool NotNull, bool PrimaryKey)> cols = [];
+        foreach (ColumnDraft c in _columns)
+        {
+            if (string.IsNullOrWhiteSpace(c.Name))
+            {
+                _error = "Every column needs a name.";
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(c.Type))
+            {
+                _error = $"Column '{c.Name}' needs a type.";
+                return;
+            }
+
+            cols.Add((c.Name.Trim(), c.Type.Trim(), c.NotNull || c.PrimaryKey, c.PrimaryKey));
+        }
+
+        string sql;
+        try
+        {
+            sql = SqlBuilder.BuildCreateTable(_tableName.Trim(), cols);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            QueryResultModel result = await Queries.ExecuteAsync(sql);
+            if (!result.Success)
+            {
+                _error = result.ErrorMessage ?? "Create table failed.";
+                return;
+            }
+
+            Snackbar.Add($"Table '{_tableName.Trim()}' created.", Severity.Success);
+            MudDialog.Close(DialogResult.Ok(true));
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private sealed class ColumnDraft
+    {
+        public string Name { get; set; } = "";
+        public string Type { get; set; } = "STRING";
+        public bool NotNull { get; set; }
+        public bool PrimaryKey { get; set; }
+    }
+}

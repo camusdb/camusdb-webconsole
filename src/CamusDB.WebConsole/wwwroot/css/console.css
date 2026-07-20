@@ -47,18 +47,50 @@ html, body {
     overflow: hidden;
 }
 
+.schema-drawer-host {
+    display: flex;
+    flex-direction: row;
+    align-self: stretch;
+    height: 100%;
+    min-height: 0;
+    flex-shrink: 0;
+}
+
 .schema-drawer {
     width: 280px;
-    min-width: 220px;
-    max-width: 420px;
     height: 100%;
     align-self: stretch;
-    border-right: 1px solid var(--camus-border);
     background: var(--camus-surface);
     display: flex;
     flex-direction: column;
     min-height: 0;
+    min-width: 0;
     overflow: hidden;
+    flex-shrink: 0;
+}
+
+.schema-split-handle {
+    width: 6px;
+    cursor: col-resize;
+    background: var(--camus-surface);
+    border-right: 1px solid var(--camus-border);
+    flex-shrink: 0;
+    touch-action: none;
+    user-select: none;
+}
+
+.schema-split-handle:hover,
+.schema-split-handle:active {
+    background: var(--camus-green-dim);
+}
+
+.schema-split-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    cursor: col-resize;
+    touch-action: none;
+    user-select: none;
 }
 
 .schema-tree {
@@ -97,6 +129,16 @@ html, body {
     user-select: none;
 }
 
+.schema-context-menu-host {
+    display: block;
+    width: 100%;
+}
+
+.schema-context-menu-host .mud-menu-activator {
+    display: block;
+    width: 100%;
+}
+
 .schema-node:hover {
     background: var(--camus-surface-2);
 }
@@ -108,11 +150,18 @@ html, body {
     box-shadow: inset 3px 0 0 var(--camus-green);
 }
 
-.schema-db-name {
+.schema-db-name,
+.schema-node-label {
     font-weight: 500;
+    flex: 1 1 auto;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.schema-node-label {
+    font-weight: inherit;
 }
 
 .schema-db.active .schema-db-name {
@@ -166,6 +215,7 @@ html, body {
     font-size: 0.75rem;
     margin-left: auto;
     font-family: var(--camus-mono);
+    flex-shrink: 0;
 }
 
 .schema-children {
@@ -377,11 +427,22 @@ html, body {
 .results-toolbar {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    gap: 12px;
+    justify-content: flex-start;
     padding: 6px 12px;
     border-bottom: 1px solid var(--camus-border);
     font-size: 0.8125rem;
     color: var(--camus-muted);
+}
+
+.results-table-badge {
+    margin-left: auto;
+    padding: 1px 8px;
+    border-radius: 4px;
+    background: rgba(78, 161, 255, 0.15);
+    color: var(--camus-accent);
+    font-family: var(--camus-mono);
+    font-size: 0.75rem;
 }
 
 .results-grid-wrap {
@@ -425,6 +486,182 @@ html, body {
 
 .results-table tr:hover td {
     background: rgba(255, 255, 255, 0.03);
+}
+
+.results-actions-col {
+    width: 88px;
+    text-align: center !important;
+    position: sticky;
+    right: 0;
+    background: var(--camus-surface);
+    z-index: 1;
+}
+
+.results-table th.results-actions-col {
+    background: var(--camus-surface-2);
+    z-index: 2;
+}
+
+.results-row-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 0;
+}
+
+.results-row-menu-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1400;
+}
+
+.results-row-menu {
+    position: fixed;
+    z-index: 1401;
+    min-width: 140px;
+    padding: 4px 0;
+    background: var(--camus-surface-2);
+    border: 1px solid var(--camus-border);
+    border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+.results-row-menu button {
+    display: block;
+    width: 100%;
+    border: 0;
+    background: transparent;
+    color: var(--camus-text);
+    text-align: left;
+    padding: 8px 14px;
+    font: inherit;
+    cursor: pointer;
+}
+
+.results-row-menu button:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.results-row-menu button:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.results-row-menu button.danger {
+    color: var(--camus-danger);
+}
+
+.results-row-menu-hint {
+    padding: 4px 14px 8px;
+    font-size: 0.75rem;
+    color: var(--camus-muted);
+}
+
+.edit-record-wrap {
+    max-height: min(60vh, 480px);
+    overflow: auto;
+}
+
+.edit-record-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.875rem;
+}
+
+.edit-record-table th,
+.edit-record-table td {
+    border-bottom: 1px solid var(--camus-border);
+    padding: 8px 10px;
+    vertical-align: top;
+    text-align: left;
+}
+
+.edit-record-table th {
+    color: var(--camus-muted);
+    font-weight: 500;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    position: sticky;
+    top: 0;
+    background: var(--mud-palette-surface, var(--camus-surface-2));
+    z-index: 1;
+}
+
+.edit-record-field {
+    width: 36%;
+    min-width: 140px;
+}
+
+.edit-record-field-name {
+    font-family: var(--camus-mono);
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.edit-record-field-type {
+    margin-top: 2px;
+    color: var(--camus-muted);
+    font-family: var(--camus-mono);
+    font-size: 0.75rem;
+}
+
+.edit-record-pk-badge {
+    font-size: 0.65rem;
+    font-weight: 600;
+    padding: 1px 5px;
+    border-radius: 3px;
+    background: rgba(78, 161, 255, 0.18);
+    color: var(--camus-accent);
+}
+
+.edit-record-value-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+}
+
+.edit-record-input {
+    flex: 1;
+    min-width: 0;
+}
+
+.edit-record-native-input {
+    width: 100%;
+    box-sizing: border-box;
+    height: 36px;
+    padding: 6px 12px;
+    border: 1px solid var(--camus-border);
+    border-radius: 4px;
+    background: var(--camus-surface);
+    color: var(--camus-text);
+    font-family: var(--camus-mono);
+    font-size: 0.875rem;
+    outline: none;
+}
+
+.edit-record-native-input:focus {
+    border-color: var(--camus-accent);
+}
+
+.edit-record-native-input:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.edit-record-input-error .edit-record-native-input {
+    border-color: var(--camus-danger);
+}
+
+.edit-record-error {
+    margin-top: 4px;
+    color: var(--camus-danger);
+    font-size: 0.75rem;
+}
+
+.edit-record-pk td {
+    opacity: 0.85;
 }
 
 .cell-null {

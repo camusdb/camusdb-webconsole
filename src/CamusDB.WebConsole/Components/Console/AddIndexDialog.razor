@@ -1,0 +1,124 @@
+@inject QueryExecutionService Queries
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <TitleContent>
+        <MudText Typo="Typo.h6">Add index</MudText>
+    </TitleContent>
+    <DialogContent>
+        <MudStack Spacing="3" Class="mt-2">
+            <MudText Typo="Typo.caption" Class="mud-text-secondary">Table: @_table</MudText>
+            <MudTextField @bind-Value="_indexName"
+                          Label="Index name"
+                          Variant="Variant.Outlined"
+                          Immediate="true" />
+            <MudSelect T="string"
+                       MultiSelection="true"
+                       @bind-SelectedValues="_selectedColumns"
+                       Label="Columns"
+                       Variant="Variant.Outlined"
+                       MultiSelectionTextFunc="@(vals => string.Join(", ", vals))"
+                       Clearable="true">
+                @foreach (ColumnSchemaInfo col in _columns)
+                {
+                    <MudSelectItem Value="@col.Name">@col.Name (@(col.Type ?? "?"))</MudSelectItem>
+                }
+            </MudSelect>
+            <MudCheckBox @bind-Value="_unique" Label="Unique" Dense="true" />
+            @if (!string.IsNullOrEmpty(_error))
+            {
+                <MudAlert Severity="Severity.Error" Dense="true">@_error</MudAlert>
+            }
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel" Disabled="_busy">Cancel</MudButton>
+        <MudButton Color="Color.Primary"
+                   Variant="Variant.Filled"
+                   OnClick="CreateAsync"
+                   Disabled="_busy"
+                   Class="run-btn">
+            @(_busy ? "Creating…" : "Create index")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter]
+    private IMudDialogInstance MudDialog { get; set; } = null!;
+
+    [Parameter]
+    public string Table { get; set; } = "";
+
+    [Parameter]
+    public IReadOnlyList<ColumnSchemaInfo> Columns { get; set; } = [];
+
+    private string _table = "";
+    private string _indexName = "";
+    private IReadOnlyList<ColumnSchemaInfo> _columns = [];
+    private IReadOnlyCollection<string> _selectedColumns = Array.Empty<string>();
+    private bool _unique;
+    private string? _error;
+    private bool _busy;
+
+    protected override void OnInitialized()
+    {
+        _table = Table;
+        _columns = Columns;
+        if (_columns.Count > 0)
+            _indexName = $"idx_{_table}_{_columns[0].Name}";
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private async Task CreateAsync()
+    {
+        _error = null;
+
+        if (string.IsNullOrWhiteSpace(_indexName))
+        {
+            _error = "Index name is required.";
+            return;
+        }
+
+        List<string> cols = _selectedColumns.ToList();
+        if (cols.Count == 0)
+        {
+            _error = "Select at least one column.";
+            return;
+        }
+
+        string sql;
+        try
+        {
+            sql = SqlBuilder.BuildCreateIndex(_indexName.Trim(), _table, cols, _unique);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            QueryResultModel result = await Queries.ExecuteAsync(sql);
+            if (!result.Success)
+            {
+                _error = result.ErrorMessage ?? "Create index failed.";
+                return;
+            }
+
+            Snackbar.Add($"Index '{_indexName.Trim()}' created.", Severity.Success);
+            MudDialog.Close(DialogResult.Ok(true));
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

@@ -4,7 +4,7 @@
 <PageTitle>CamusDB Web Console</PageTitle>
 
 <div class="console-main" style="flex-direction: row; display: flex; flex: 1; min-height: 0; width: 100%; height: 100%;">
-    <SchemaExplorer OnInsertSql="InsertSqlAsync" />
+    <SchemaExplorer OnInsertSql="InsertSqlAsync" OnOpenTableData="OpenTableDataAsync" />
     <div class="console-main" style="height: 100%;">
         <QueryWorkspace @ref="_workspace" />
     </div>
@@ -34,5 +34,11 @@
     {
         if (_workspace is not null)
             await _workspace.InsertSqlAsync(sql);
+    }
+
+    private async Task OpenTableDataAsync(TableDataContext context)
+    {
+        if (_workspace is not null)
+            await _workspace.OpenTableDataAsync(context);
     }
 }

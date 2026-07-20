@@ -1,155 +1,236 @@
 @inject CamusSessionService Session
 @inject SchemaExplorerService Schema
+@inject QueryExecutionService Queries
+@inject IDialogService DialogService
 @inject ISnackbar Snackbar
 @implements IDisposable
 
-<aside class="schema-drawer">
-    <div class="schema-drawer-header">
-        <MudTextField @bind-Value="_filter"
-                      Placeholder="Filter…"
-                      Variant="Variant.Outlined"
-                      Margin="Margin.Dense"
-                      Adornment="Adornment.Start"
-                      AdornmentIcon="@Icons.Material.Filled.Search"
-                      Immediate="true"
-                      Class="schema-filter" />
-        <div class="d-flex justify-space-between align-center mt-2">
-            <MudText Typo="Typo.caption" Class="mud-text-secondary">
-                @StatusLabel
-            </MudText>
-            <MudIconButton Icon="@Icons.Material.Filled.Refresh"
-                           Size="Size.Small"
-                           Disabled="!Session.IsConnected || _loading"
-                           OnClick="RefreshAsync"
-                           aria-label="Refresh schema" />
+<div class="schema-drawer-host">
+    <aside class="schema-drawer" style="@($"width:{_drawerWidth}px")">
+        <div class="schema-drawer-header">
+            <MudTextField @bind-Value="_filter"
+                          Placeholder="Filter…"
+                          Variant="Variant.Outlined"
+                          Margin="Margin.Dense"
+                          Adornment="Adornment.Start"
+                          AdornmentIcon="@Icons.Material.Filled.Search"
+                          Immediate="true"
+                          Class="schema-filter" />
+            <div class="d-flex justify-space-between align-center mt-2">
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                    @StatusLabel
+                </MudText>
+                <MudIconButton Icon="@Icons.Material.Filled.Refresh"
+                               Size="Size.Small"
+                               Disabled="!Session.IsConnected || _loading"
+                               OnClick="RefreshAsync"
+                               aria-label="Refresh schema" />
+            </div>
         </div>
-    </div>
 
-    <div class="schema-tree">
-        @if (!Session.IsConnected)
-        {
-            <div class="empty-state">Connect via Configure to browse schema.</div>
-        }
-        else if (_loading && _databases.Count == 0)
-        {
-            <div class="empty-state"><MudProgressCircular Indeterminate="true" Size="Size.Small" /></div>
-        }
-        else if (_error is not null)
-        {
-            <div class="empty-state" style="color: var(--camus-danger);">@_error</div>
-        }
-        else if (_databases.Count == 0)
-        {
-            <div class="empty-state">No databases.</div>
-        }
-        else
-        {
-            @foreach (DbEntry db in VisibleDatabases)
+        <div class="schema-tree">
+            @if (!Session.IsConnected)
             {
-                bool isActive = IsActiveDatabase(db);
-                <div class="schema-node schema-db @(isActive ? "active" : null)"
-                     @onclick="() => SelectDatabaseAsync(db)"
-                     title="@(isActive ? "Active database" : "Click to use this database")">
-                    <button type="button"
-                            class="schema-expand-btn"
-                            title="@(db.Expanded ? "Collapse" : "Expand")"
-                            @onclick="() => ToggleDatabaseExpandAsync(db)"
-                            @onclick:stopPropagation="true">
-                        <MudIcon Icon="@(db.Expanded ? Icons.Material.Filled.ExpandMore : Icons.Material.Filled.ChevronRight)"
-                                 Size="Size.Small" />
-                    </button>
-                    <MudIcon Icon="@Icons.Material.Filled.Storage" Size="Size.Small" Class="@(isActive ? "schema-db-icon-active" : null)" />
-                    <span class="schema-db-name">@db.Name</span>
-                    <span class="schema-node-detail">@db.Tables.Count</span>
-                    @if (isActive)
-                    {
-                        <span class="schema-db-badge">active</span>
-                    }
-                </div>
-
-                @if (db.Expanded)
+                <div class="empty-state">Connect via Configure to browse schema.</div>
+            }
+            else if (_loading && _databases.Count == 0)
+            {
+                <div class="empty-state"><MudProgressCircular Indeterminate="true" Size="Size.Small" /></div>
+            }
+            else if (_error is not null)
+            {
+                <div class="empty-state" style="color: var(--camus-danger);">@_error</div>
+            }
+            else if (_databases.Count == 0)
+            {
+                <div class="empty-state">No databases.</div>
+            }
+            else
+            {
+                @foreach (DbEntry db in VisibleDatabases)
                 {
-                    <div class="schema-children">
-                        @if (db.Loading)
-                        {
-                            <div class="schema-node mud-text-secondary">Loading…</div>
-                        }
-                        else if (db.Tables.Count == 0)
-                        {
-                            <div class="schema-node mud-text-secondary">(no tables)</div>
-                        }
-                        else
-                        {
-                            @foreach (TableEntry table in VisibleTables(db))
-                            {
-                                <div class="schema-node"
-                                     @onclick="() => ToggleTableAsync(db, table)"
-                                     @ondblclick="() => InsertSelectAsync(table.Name)"
-                                     @ondblclick:stopPropagation="true">
-                                    <MudIcon Icon="@(table.Expanded ? Icons.Material.Filled.ExpandMore : Icons.Material.Filled.ChevronRight)"
+                    bool isActive = IsActiveDatabase(db);
+                    <MudMenu ActivationEvent="MudBlazor.MouseEvent.RightClick"
+                             PositionAtCursor="true"
+                             Dense="true"
+                             Class="schema-context-menu-host">
+                        <ActivatorContent>
+                            <div class="schema-node schema-db @(isActive ? "active" : null)"
+                                 @onclick="() => SelectDatabaseAsync(db)"
+                                 @oncontextmenu="context.ToggleAsync"
+                                 @oncontextmenu:preventDefault="true"
+                                 title="@($"{db.Name} — {(isActive ? "Active database" : "Click to use this database")}")">
+                                <button type="button"
+                                        class="schema-expand-btn"
+                                        title="@(db.Expanded ? "Collapse" : "Expand")"
+                                        @onclick="() => ToggleDatabaseExpandAsync(db)"
+                                        @onclick:stopPropagation="true">
+                                    <MudIcon Icon="@(db.Expanded ? Icons.Material.Filled.ExpandMore : Icons.Material.Filled.ChevronRight)"
                                              Size="Size.Small" />
-                                    <MudIcon Icon="@Icons.Material.Filled.TableChart" Size="Size.Small" />
-                                    <span>@table.Name</span>
-                                </div>
-
-                                @if (table.Expanded)
+                                </button>
+                                <MudIcon Icon="@Icons.Material.Filled.Storage" Size="Size.Small" Class="@(isActive ? "schema-db-icon-active" : null)" />
+                                <span class="schema-db-name">@db.Name</span>
+                                <span class="schema-node-detail">@db.Tables.Count</span>
+                                @if (isActive)
                                 {
-                                    <div class="schema-children">
-                                        @if (table.Loading)
-                                        {
-                                            <div class="schema-node mud-text-secondary">Loading…</div>
-                                        }
-                                        else
-                                        {
-                                            @foreach (ColumnSchemaInfo col in table.Columns)
+                                    <span class="schema-db-badge">active</span>
+                                }
+                            </div>
+                        </ActivatorContent>
+                        <ChildContent>
+                            <MudMenuItem Icon="@Icons.Material.Filled.Add"
+                                         OnClick="() => CreateTableAsync(db)">
+                                Create a Table
+                            </MudMenuItem>
+                            <MudMenuItem Icon="@Icons.Material.Filled.Delete"
+                                         IconColor="Color.Error"
+                                         OnClick="() => DropDatabaseAsync(db)">
+                                Drop Database
+                            </MudMenuItem>
+                        </ChildContent>
+                    </MudMenu>
+
+                    @if (db.Expanded)
+                    {
+                        <div class="schema-children">
+                            @if (db.Loading)
+                            {
+                                <div class="schema-node mud-text-secondary">Loading…</div>
+                            }
+                            else if (db.Tables.Count == 0)
+                            {
+                                <div class="schema-node mud-text-secondary">(no tables)</div>
+                            }
+                            else
+                            {
+                                @foreach (TableEntry table in VisibleTables(db))
+                                {
+                                    <MudMenu ActivationEvent="MudBlazor.MouseEvent.RightClick"
+                                             PositionAtCursor="true"
+                                             Dense="true"
+                                             Class="schema-context-menu-host">
+                                        <ActivatorContent>
+                                            <div class="schema-node"
+                                                 @ondblclick="() => InsertSelectAsync(table.Name)"
+                                                 @ondblclick:stopPropagation="true"
+                                                 @oncontextmenu="context.ToggleAsync"
+                                                 @oncontextmenu:preventDefault="true"
+                                                 title="@($"{table.Name} — Double-click to select data")">
+                                                <button type="button"
+                                                        class="schema-expand-btn"
+                                                        title="@(table.Expanded ? "Collapse" : "Expand")"
+                                                        @onclick="() => ToggleTableAsync(db, table)"
+                                                        @onclick:stopPropagation="true">
+                                                    <MudIcon Icon="@(table.Expanded ? Icons.Material.Filled.ExpandMore : Icons.Material.Filled.ChevronRight)"
+                                                             Size="Size.Small" />
+                                                </button>
+                                                <MudIcon Icon="@Icons.Material.Filled.TableChart" Size="Size.Small" />
+                                                <span class="schema-node-label">@table.Name</span>
+                                            </div>
+                                        </ActivatorContent>
+                                        <ChildContent>
+                                            <MudMenuItem Icon="@Icons.Material.Filled.TableView"
+                                                         OnClick="() => EditViewDataAsync(db, table)">
+                                                Edit/View Data
+                                            </MudMenuItem>
+                                            <MudMenuItem Icon="@Icons.Material.Filled.Delete"
+                                                         IconColor="Color.Error"
+                                                         OnClick="() => DropTableAsync(db, table)">
+                                                Drop Table
+                                            </MudMenuItem>
+                                            <MudMenuItem Icon="@Icons.Material.Filled.FileDownload"
+                                                         OnClick="() => ExportTableAsync(db, table)">
+                                                Export Table
+                                            </MudMenuItem>
+                                            <MudMenuItem Icon="@Icons.Material.Filled.Key"
+                                                         OnClick="() => AddIndexAsync(db, table)">
+                                                Add an Index
+                                            </MudMenuItem>
+                                        </ChildContent>
+                                    </MudMenu>
+
+                                    @if (table.Expanded)
+                                    {
+                                        <div class="schema-children">
+                                            @if (table.Loading)
                                             {
-                                                <div class="schema-node">
-                                                    <span style="width:20px;display:inline-block;"></span>
-                                                    <MudIcon Icon="@Icons.Material.Filled.DataObject" Size="Size.Small" />
-                                                    <span>@col.Name</span>
-                                                    @if (!string.IsNullOrEmpty(col.Type))
-                                                    {
-                                                        <span class="schema-node-detail">@col.Type</span>
-                                                    }
-                                                </div>
+                                                <div class="schema-node mud-text-secondary">Loading…</div>
                                             }
-                                            @foreach (IndexSchemaInfo idx in table.Indexes)
+                                            else
                                             {
-                                                <div class="schema-node">
-                                                    <span style="width:20px;display:inline-block;"></span>
-                                                    <MudIcon Icon="@Icons.Material.Filled.Key" Size="Size.Small" />
-                                                    <span>@idx.Name</span>
-                                                    @if (!string.IsNullOrEmpty(idx.Columns))
-                                                    {
-                                                        <span class="schema-node-detail">@idx.Columns</span>
-                                                    }
-                                                </div>
+                                                @foreach (ColumnSchemaInfo col in table.Columns)
+                                                {
+                                                    <div class="schema-node" title="@col.Name">
+                                                        <span style="width:20px;display:inline-block;"></span>
+                                                        <MudIcon Icon="@Icons.Material.Filled.DataObject" Size="Size.Small" />
+                                                        <span class="schema-node-label">@col.Name</span>
+                                                        @if (!string.IsNullOrEmpty(col.Type))
+                                                        {
+                                                            <span class="schema-node-detail">@col.Type</span>
+                                                        }
+                                                    </div>
+                                                }
+                                                @foreach (IndexSchemaInfo idx in table.Indexes)
+                                                {
+                                                    <div class="schema-node" title="@idx.Name">
+                                                        <span style="width:20px;display:inline-block;"></span>
+                                                        <MudIcon Icon="@Icons.Material.Filled.Key" Size="Size.Small" />
+                                                        <span class="schema-node-label">@idx.Name</span>
+                                                        @if (!string.IsNullOrEmpty(idx.Columns))
+                                                        {
+                                                            <span class="schema-node-detail">@idx.Columns</span>
+                                                        }
+                                                    </div>
+                                                }
+                                                @if (table.Columns.Count == 0 && table.Indexes.Count == 0)
+                                                {
+                                                    <div class="schema-node mud-text-secondary">(no columns)</div>
+                                                }
                                             }
-                                            @if (table.Columns.Count == 0 && table.Indexes.Count == 0)
-                                            {
-                                                <div class="schema-node mud-text-secondary">(no columns)</div>
-                                            }
-                                        }
-                                    </div>
+                                        </div>
+                                    }
                                 }
                             }
-                        }
-                    </div>
+                        </div>
+                    }
                 }
             }
-        }
-    </div>
-</aside>
+        </div>
+    </aside>
+
+    <div class="schema-split-handle"
+         title="Drag to resize"
+         @onpointerdown="OnSplitPointerDown"></div>
+
+    @if (_splitting)
+    {
+        <div class="schema-split-overlay"
+             @onpointermove="OnSplitPointerMove"
+             @onpointerup="OnSplitPointerUp"
+             @onpointercancel="OnSplitPointerUp"></div>
+    }
+</div>
 
 @code {
+    private const int MinDrawerWidth = 220;
+    private const int MaxDrawerWidth = 560;
+    private const int DefaultDrawerWidth = 280;
+
     [Parameter]
     public EventCallback<string> OnInsertSql { get; set; }
+
+    [Parameter]
+    public EventCallback<TableDataContext> OnOpenTableData { get; set; }
 
     private readonly List<DbEntry> _databases = [];
     private string _filter = "";
     private bool _loading;
     private bool _wasConnected;
     private string? _error;
+    private int _drawerWidth = DefaultDrawerWidth;
+    private bool _splitting;
+    private double _splitStartX;
+    private int _splitStartWidth;
 
     private string StatusLabel =>
         _databases.Count == 0
@@ -315,7 +396,6 @@
         StateHasChanged();
         try
         {
-            // Ensure queries run against this table's database without forcing a full UI refresh.
             await Session.ChangeDatabaseAsync(db.Name, notify: true);
             table.Columns = (await Schema.ListColumnsAsync(table.Name)).ToList();
             table.Indexes = (await Schema.ListIndexesAsync(table.Name)).ToList();
@@ -345,7 +425,214 @@
     }
 
     private Task InsertSelectAsync(string table) =>
-        OnInsertSql.InvokeAsync($"SELECT * FROM {table} LIMIT 100");
+        OnInsertSql.InvokeAsync($"SELECT * FROM {table}\nLIMIT 100");
+
+    private static DialogOptions DialogOptions => new()
+    {
+        CloseOnEscapeKey = true,
+        MaxWidth = MaxWidth.Small,
+        FullWidth = true,
+    };
+
+    private static DialogOptions WideDialogOptions => new()
+    {
+        CloseOnEscapeKey = true,
+        MaxWidth = MaxWidth.Medium,
+        FullWidth = true,
+    };
+
+    private async Task<bool> ConfirmAsync(string title, string message, string confirmText = "Confirm")
+    {
+        var parameters = new DialogParameters<ConfirmDialog>
+        {
+            { x => x.Message, message },
+            { x => x.ConfirmText, confirmText },
+            { x => x.ConfirmColor, Color.Error },
+        };
+
+        IDialogReference dialog = await DialogService.ShowAsync<ConfirmDialog>(title, parameters, DialogOptions);
+        DialogResult? result = await dialog.Result;
+        return result is { Canceled: false };
+    }
+
+    private async Task CreateTableAsync(DbEntry db)
+    {
+        try
+        {
+            await Session.ChangeDatabaseAsync(db.Name, notify: true);
+            var parameters = new DialogParameters<CreateTableDialog>
+            {
+                { x => x.Database, db.Name },
+            };
+
+            IDialogReference dialog = await DialogService.ShowAsync<CreateTableDialog>("Create table", parameters, WideDialogOptions);
+            DialogResult? result = await dialog.Result;
+            if (result is { Canceled: false })
+                await ReloadDatabaseTablesAsync(db);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    private async Task DropDatabaseAsync(DbEntry db)
+    {
+        bool ok = await ConfirmAsync(
+            "Drop database",
+            $"Drop database '{db.Name}'? This cannot be undone.",
+            "Drop Database");
+        if (!ok)
+            return;
+
+        try
+        {
+            QueryResultModel result = await Queries.ExecuteAsync(SqlBuilder.BuildDropDatabase(db.Name));
+            if (!result.Success)
+            {
+                Snackbar.Add(result.ErrorMessage ?? "Drop database failed.", Severity.Error);
+                return;
+            }
+
+            Snackbar.Add($"Database '{db.Name}' dropped.", Severity.Success);
+            await RefreshAsync();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    private async Task EditViewDataAsync(DbEntry db, TableEntry table)
+    {
+        try
+        {
+            await Session.ChangeDatabaseAsync(db.Name, notify: true);
+            if (!table.Loaded)
+                await LoadTableDetailsAsync(db, table);
+
+            var context = new TableDataContext
+            {
+                Database = db.Name,
+                Table = table.Name,
+                Columns = table.Columns.ToList(),
+            };
+
+            await OnOpenTableData.InvokeAsync(context);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    private async Task DropTableAsync(DbEntry db, TableEntry table)
+    {
+        bool ok = await ConfirmAsync(
+            "Drop table",
+            $"Drop table '{table.Name}' in database '{db.Name}'? This cannot be undone.",
+            "Drop Table");
+        if (!ok)
+            return;
+
+        try
+        {
+            await Session.ChangeDatabaseAsync(db.Name, notify: true);
+            QueryResultModel result = await Queries.ExecuteAsync(SqlBuilder.BuildDropTable(table.Name));
+            if (!result.Success)
+            {
+                Snackbar.Add(result.ErrorMessage ?? "Drop table failed.", Severity.Error);
+                return;
+            }
+
+            Snackbar.Add($"Table '{table.Name}' dropped.", Severity.Success);
+            await ReloadDatabaseTablesAsync(db);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    private async Task ExportTableAsync(DbEntry db, TableEntry table)
+    {
+        try
+        {
+            await Session.ChangeDatabaseAsync(db.Name, notify: true);
+            var parameters = new DialogParameters<ExportTableDialog>
+            {
+                { x => x.Table, table.Name },
+            };
+
+            await DialogService.ShowAsync<ExportTableDialog>("Export table", parameters, DialogOptions);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    private async Task AddIndexAsync(DbEntry db, TableEntry table)
+    {
+        try
+        {
+            await Session.ChangeDatabaseAsync(db.Name, notify: true);
+            if (!table.Loaded)
+                await LoadTableDetailsAsync(db, table);
+
+            if (table.Columns.Count == 0)
+            {
+                Snackbar.Add("Table has no columns to index.", Severity.Warning);
+                return;
+            }
+
+            var parameters = new DialogParameters<AddIndexDialog>
+            {
+                { x => x.Table, table.Name },
+                { x => x.Columns, table.Columns.ToList() },
+            };
+
+            IDialogReference dialog = await DialogService.ShowAsync<AddIndexDialog>("Add index", parameters, DialogOptions);
+            DialogResult? result = await dialog.Result;
+            if (result is { Canceled: false })
+            {
+                table.Loaded = false;
+                if (table.Expanded)
+                    await LoadTableDetailsAsync(db, table);
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    private async Task ReloadDatabaseTablesAsync(DbEntry db)
+    {
+        db.Loaded = false;
+        db.Expanded = true;
+        await LoadTablesAsync(db, activate: true);
+    }
+
+    private void OnSplitPointerDown(PointerEventArgs e)
+    {
+        _splitting = true;
+        _splitStartX = e.ClientX;
+        _splitStartWidth = _drawerWidth;
+    }
+
+    private void OnSplitPointerMove(PointerEventArgs e)
+    {
+        if (!_splitting)
+            return;
+
+        int next = _splitStartWidth + (int)(e.ClientX - _splitStartX);
+        int clamped = Math.Clamp(next, MinDrawerWidth, MaxDrawerWidth);
+        if (clamped != _drawerWidth)
+            _drawerWidth = clamped;
+    }
+
+    private void OnSplitPointerUp(PointerEventArgs e) => _splitting = false;
 
     public void Dispose() => Session.Changed -= OnSessionChanged;
 

@@ -1,0 +1,95 @@
+@inject ExportService Export
+@inject IJSRuntime Js
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <TitleContent>
+        <MudText Typo="Typo.h6">Export table — @_table</MudText>
+    </TitleContent>
+    <DialogContent>
+        <MudStack Spacing="3" Class="mt-2">
+            <MudRadioGroup T="ExportFormat" @bind-Value="_format">
+                <MudRadio Value="ExportFormat.Csv" Color="Color.Primary">CSV</MudRadio>
+                <MudRadio Value="ExportFormat.Json" Color="Color.Primary">JSON</MudRadio>
+            </MudRadioGroup>
+            <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                File: @_table.@(_format == ExportFormat.Csv ? "csv" : "json")
+            </MudText>
+            <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                Export is capped at the session MaxRows setting.
+            </MudText>
+            @if (!string.IsNullOrEmpty(_error))
+            {
+                <MudAlert Severity="Severity.Error" Dense="true">@_error</MudAlert>
+            }
+            @if (!string.IsNullOrEmpty(_warning))
+            {
+                <MudAlert Severity="Severity.Warning" Dense="true">@_warning</MudAlert>
+            }
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel" Disabled="_busy">Cancel</MudButton>
+        <MudButton Color="Color.Primary"
+                   Variant="Variant.Filled"
+                   OnClick="ExportAsync"
+                   Disabled="_busy"
+                   Class="run-btn">
+            @(_busy ? "Exporting…" : "Export")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter]
+    private IMudDialogInstance MudDialog { get; set; } = null!;
+
+    [Parameter]
+    public string Table { get; set; } = "";
+
+    private string _table = "";
+    private ExportFormat _format = ExportFormat.Csv;
+    private string? _error;
+    private string? _warning;
+    private bool _busy;
+
+    protected override void OnInitialized() => _table = Table;
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private async Task ExportAsync()
+    {
+        _error = null;
+        _warning = null;
+        _busy = true;
+        try
+        {
+            ExportResult result = await Export.ExportTableAsync(_table, _format);
+            if (!result.Success)
+            {
+                _error = result.ErrorMessage ?? "Export failed.";
+                return;
+            }
+
+            if (result.Truncated)
+                _warning = $"Export truncated at {result.MaxRows:N0} rows ({result.RowsExported:N0} exported).";
+
+            await Js.InvokeVoidAsync(
+                "camusDownload.downloadText",
+                result.FileName,
+                result.Content,
+                result.MimeType);
+
+            Snackbar.Add($"Exported {result.RowsExported:N0} row(s) to {result.FileName}.", Severity.Success);
+            MudDialog.Close(DialogResult.Ok(true));
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

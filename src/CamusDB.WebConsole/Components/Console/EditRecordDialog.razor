@@ -1,0 +1,285 @@
+@inject QueryExecutionService Queries
+@inject ISnackbar Snackbar
+@inject IJSRuntime Js
+
+<MudDialog>
+    <TitleContent>
+        <MudText Typo="Typo.h6">Edit record — @_table</MudText>
+    </TitleContent>
+    <DialogContent>
+        <div class="edit-record-wrap mt-2" @ref="_dialogRoot">
+            <table class="edit-record-table">
+                <thead>
+                    <tr>
+                        <th>Field</th>
+                        <th>Value</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (FieldDraft field in _fields)
+                    {
+                        <tr class="@(field.IsPrimaryKey ? "edit-record-pk" : null)">
+                            <td class="edit-record-field">
+                                <div class="edit-record-field-name">
+                                    @field.Name
+                                    @if (field.IsPrimaryKey)
+                                    {
+                                        <span class="edit-record-pk-badge">PK</span>
+                                    }
+                                </div>
+                                @if (!string.IsNullOrEmpty(field.Type))
+                                {
+                                    <div class="edit-record-field-type">@field.Type</div>
+                                }
+                            </td>
+                            <td class="edit-record-value">
+                                <div class="edit-record-value-row">
+                                    @if (SqlBuilder.IsBoolType(field.Type))
+                                    {
+                                        <MudSelect T="string"
+                                                   @bind-Value="field.Text"
+                                                   Variant="Variant.Outlined"
+                                                   Margin="Margin.Dense"
+                                                   Disabled="field.IsPrimaryKey || field.IsNull"
+                                                   Class="edit-record-input">
+                                            <MudSelectItem Value="@("true")">true</MudSelectItem>
+                                            <MudSelectItem Value="@("false")">false</MudSelectItem>
+                                        </MudSelect>
+                                    }
+                                    else if (SqlBuilder.IsIntegerType(field.Type))
+                                    {
+                                        <div class="edit-record-input @(string.IsNullOrEmpty(field.Error) ? null : "edit-record-input-error")">
+                                            <input class="edit-record-native-input"
+                                                   type="text"
+                                                   inputmode="numeric"
+                                                   data-camus-integer="1"
+                                                   autocomplete="off"
+                                                   spellcheck="false"
+                                                   disabled="@(field.IsPrimaryKey || field.IsNull)"
+                                                   value="@field.Text"
+                                                   @oninput="e => OnIntegerInput(field, e)" />
+                                            @if (!string.IsNullOrEmpty(field.Error))
+                                            {
+                                                <div class="edit-record-error">@field.Error</div>
+                                            }
+                                        </div>
+                                    }
+                                    else
+                                    {
+                                        <MudTextField @bind-Value="field.Text"
+                                                      Variant="Variant.Outlined"
+                                                      Margin="Margin.Dense"
+                                                      Immediate="true"
+                                                      Disabled="field.IsPrimaryKey || field.IsNull"
+                                                      Class="edit-record-input"
+                                                      Error="!string.IsNullOrEmpty(field.Error)"
+                                                      ErrorText="@field.Error" />
+                                    }
+                                    @if (field.AllowNull && !field.IsPrimaryKey)
+                                    {
+                                        <MudCheckBox @bind-Value="field.IsNull"
+                                                     Label="NULL"
+                                                     Dense="true"
+                                                     T="bool" />
+                                    }
+                                </div>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+            @if (!string.IsNullOrEmpty(_error))
+            {
+                <MudAlert Severity="Severity.Error" Dense="true" Class="mt-2">@_error</MudAlert>
+            }
+        </div>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel" Disabled="_busy">Cancel</MudButton>
+        <MudButton Color="Color.Primary"
+                   Variant="Variant.Filled"
+                   OnClick="SaveAsync"
+                   Disabled="_busy"
+                   Class="run-btn">
+            @(_busy ? "Saving…" : "Save")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter]
+    private IMudDialogInstance MudDialog { get; set; } = null!;
+
+    [Parameter]
+    public string Table { get; set; } = "";
+
+    [Parameter]
+    public IReadOnlyList<ColumnSchemaInfo> Columns { get; set; } = [];
+
+    [Parameter]
+    public IReadOnlyList<QueryColumn> ResultColumns { get; set; } = [];
+
+    [Parameter]
+    public object?[] Row { get; set; } = [];
+
+    private ElementReference _dialogRoot;
+    private string _table = "";
+    private readonly List<FieldDraft> _fields = [];
+    private List<(string Column, object? Value)> _pkValues = [];
+    private string? _error;
+    private bool _busy;
+    private bool _boundIntegerInputs;
+
+    protected override void OnInitialized()
+    {
+        _table = Table;
+        Dictionary<string, ColumnSchemaInfo> schemaByName = Columns
+            .ToDictionary(c => c.Name, StringComparer.OrdinalIgnoreCase);
+
+        for (int i = 0; i < ResultColumns.Count; i++)
+        {
+            QueryColumn rc = ResultColumns[i];
+            object? value = i < Row.Length ? Row[i] : null;
+            schemaByName.TryGetValue(rc.Name, out ColumnSchemaInfo? schema);
+
+            bool isPk = schema?.IsPrimaryKey ?? false;
+            bool allowNull = schema is null || SqlBuilder.IsNullable(schema);
+            string? type = schema?.Type ?? rc.TypeName;
+
+            var field = new FieldDraft
+            {
+                Name = rc.Name,
+                Type = type,
+                IsPrimaryKey = isPk,
+                AllowNull = allowNull,
+                IsNull = value is null,
+                Text = value is null ? "" : FormatInitial(value),
+                Original = value,
+            };
+            _fields.Add(field);
+
+            if (isPk)
+                _pkValues.Add((rc.Name, value));
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_boundIntegerInputs || !_fields.Any(f => SqlBuilder.IsIntegerType(f.Type)))
+            return;
+
+        try
+        {
+            await Js.InvokeVoidAsync("camusInput.bindIntegerInputs", _dialogRoot);
+            _boundIntegerInputs = true;
+        }
+        catch (JSException)
+        {
+            // Script may not be loaded yet on first paint; retry next render.
+        }
+    }
+
+    private static string FormatInitial(object value) => value switch
+    {
+        bool b => b ? "true" : "false",
+        DateTime dt => dt.ToString("yyyy-MM-dd HH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture),
+        DateOnly d => d.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture),
+        _ => Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture) ?? "",
+    };
+
+    private async Task OnIntegerInput(FieldDraft field, ChangeEventArgs e)
+    {
+        string raw = e.Value?.ToString() ?? "";
+        string filtered = SqlBuilder.FilterIntegerInput(raw);
+        field.Error = null;
+
+        if (string.Equals(filtered, raw, StringComparison.Ordinal))
+        {
+            field.Text = filtered;
+            return;
+        }
+
+        // Force the controlled input to drop rejected characters in the DOM.
+        field.Text = filtered + "\u200b";
+        await InvokeAsync(StateHasChanged);
+        await Task.Yield();
+        field.Text = filtered;
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private async Task SaveAsync()
+    {
+        _error = null;
+        bool valid = true;
+
+        foreach (FieldDraft field in _fields)
+        {
+            field.Error = null;
+            if (field.IsPrimaryKey)
+                continue;
+
+            if (!SqlBuilder.TryValidateField(field.Text, field.Type, field.AllowNull, field.IsNull, out string? err))
+            {
+                field.Error = err;
+                valid = false;
+            }
+        }
+
+        if (!valid)
+            return;
+
+        if (_pkValues.Count == 0)
+        {
+            _error = "Primary key is required to update a row.";
+            return;
+        }
+
+        List<(string Column, string? Text, string? Type, bool IsNull)> sets = _fields
+            .Where(f => !f.IsPrimaryKey)
+            .Select(f => (Column: f.Name, Text: (string?)f.Text, Type: f.Type, IsNull: f.IsNull))
+            .ToList();
+
+        if (sets.Count == 0)
+        {
+            _error = "No editable columns.";
+            return;
+        }
+
+        string sql = SqlBuilder.BuildUpdateFromText(_table, sets, _pkValues);
+
+        _busy = true;
+        try
+        {
+            QueryResultModel result = await Queries.ExecuteAsync(sql);
+            if (!result.Success)
+            {
+                _error = result.ErrorMessage ?? "Update failed.";
+                return;
+            }
+
+            Snackbar.Add("Record updated.", Severity.Success);
+            MudDialog.Close(DialogResult.Ok(true));
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private sealed class FieldDraft
+    {
+        public required string Name { get; init; }
+        public string? Type { get; init; }
+        public bool IsPrimaryKey { get; init; }
+        public bool AllowNull { get; init; }
+        public bool IsNull { get; set; }
+        public string Text { get; set; } = "";
+        public object? Original { get; init; }
+        public string? Error { get; set; }
+    }
+}

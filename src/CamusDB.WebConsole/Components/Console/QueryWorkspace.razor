@@ -78,7 +78,9 @@
 
         <div class="results-pane" @key="@($"results-{_activeId}")">
             <ExecutionStatusBar Result="ActiveTab?.LastResult" />
-            <ResultsGrid Result="ActiveTab?.LastResult" />
+            <ResultsGrid Result="ActiveTab?.LastResult"
+                         TableContext="ActiveTab?.DataContext"
+                         OnDataChanged="RefreshActiveDataAsync" />
         </div>
     </div>
 </div>
@@ -113,9 +115,32 @@
         {
             ActiveTab.Sql = sql;
             ActiveTab.Title = TruncateTitle(sql);
+            ActiveTab.DataContext = null;
         }
 
         StateHasChanged();
+    }
+
+    public async Task OpenTableDataAsync(TableDataContext context)
+    {
+        await PersistActiveEditorAsync();
+
+        int limit = Math.Max(1, Session.MaxRows);
+        string sql = SqlBuilder.BuildSelectAll(context.Table, limit);
+
+        if (ActiveTab is null)
+            AddTabCore(selectSql: sql);
+
+        if (ActiveTab is not null)
+        {
+            ActiveTab.Sql = sql;
+            ActiveTab.Title = $"data:{context.Table}";
+            ActiveTab.DataContext = context;
+            ActiveTab.LastResult = null;
+        }
+
+        StateHasChanged();
+        await RunAsync();
     }
 
     private void OnSessionChanged() => InvokeAsync(StateHasChanged);
@@ -200,7 +225,9 @@
             return;
         }
 
-        ActiveTab.Title = TruncateTitle(sql);
+        if (ActiveTab.DataContext is null)
+            ActiveTab.Title = TruncateTitle(sql);
+
         _running = true;
         _cts = new CancellationTokenSource();
         StateHasChanged();
@@ -220,6 +247,8 @@
             StateHasChanged();
         }
     }
+
+    private Task RefreshActiveDataAsync() => RunAsync();
 
     private void CancelRun() => _cts?.Cancel();
 
@@ -264,5 +293,6 @@
         public string Title { get; set; } = "SQL";
         public string Sql { get; set; } = "";
         public QueryResultModel? LastResult { get; set; }
+        public TableDataContext? DataContext { get; set; }
     }
 }

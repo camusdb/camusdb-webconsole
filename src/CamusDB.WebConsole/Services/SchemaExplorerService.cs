@@ -39,7 +39,7 @@ public sealed class SchemaExplorerService
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(table);
-        string sql = $"SHOW COLUMNS FROM {QuoteIdent(table)}";
+        string sql = $"SHOW COLUMNS FROM {SqlBuilder.QuoteIdent(table)}";
 
         await using CamusCommand command = _session.GetConnection().CreateCamusCommand(sql);
         await using CamusDataReader reader =
@@ -81,7 +81,7 @@ public sealed class SchemaExplorerService
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(table);
-        string sql = $"SHOW INDEXES FROM {QuoteIdent(table)}";
+        string sql = $"SHOW INDEXES FROM {SqlBuilder.QuoteIdent(table)}";
 
         await using CamusCommand command = _session.GetConnection().CreateCamusCommand(sql);
         await using CamusDataReader reader =
@@ -354,10 +354,4 @@ public sealed class SchemaExplorerService
         return Convert.ToString(row[index]) ?? "";
     }
 
-    private static string QuoteIdent(string ident)
-    {
-        if (ident.All(c => char.IsAsciiLetterOrDigit(c) || c == '_'))
-            return ident;
-        return "\"" + ident.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
-    }
 }

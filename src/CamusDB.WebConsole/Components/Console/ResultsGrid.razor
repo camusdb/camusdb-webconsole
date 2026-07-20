@@ -1,3 +1,7 @@
+@inject QueryExecutionService Queries
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+
 @if (Result is null)
 {
     <div class="empty-state">Run a query to see results.</div>
@@ -21,6 +25,10 @@ else
             }
         </span>
         <span>@Result.Columns.Count column@(Result.Columns.Count == 1 ? "" : "s")</span>
+        @if (TableContext is not null)
+        {
+            <span class="results-table-badge">@TableContext.Table</span>
+        }
     </div>
     <div class="results-grid-wrap">
         @if (Result.Columns.Count == 0)
@@ -39,15 +47,43 @@ else
                                 <span class="col-type">@col.TypeName</span>
                             </th>
                         }
+                        @if (ShowRowActions)
+                        {
+                            <th class="results-actions-col">Actions</th>
+                        }
                     </tr>
                 </thead>
                 <tbody>
                     <Virtualize Items="Result.Rows.ToList()" Context="row" ItemSize="28">
-                        <tr>
+                        <tr class="@(ShowRowActions ? "results-row-interactive" : null)"
+                            @oncontextmenu="e => OnRowContextMenu(e, row)"
+                            @oncontextmenu:prevent="ShowRowActions">
                             @for (int i = 0; i < Result.Columns.Count; i++)
                             {
                                 object? value = i < row.Length ? row[i] : null;
                                 <td class="@CellClass(Result.Columns[i], value)">@FormatCell(value)</td>
+                            }
+                            @if (ShowRowActions)
+                            {
+                                <td class="results-actions-col">
+                                    <div class="results-row-actions">
+                                        <MudTooltip Text="@(_canMutate ? "Edit row" : "Primary key required")">
+                                            <MudIconButton Icon="@Icons.Material.Filled.Edit"
+                                                           Size="Size.Small"
+                                                           Disabled="!_canMutate"
+                                                           OnClick="() => EditRowAsync(row)"
+                                                           aria-label="Edit row" />
+                                        </MudTooltip>
+                                        <MudTooltip Text="@(_canMutate ? "Delete row" : "Primary key required")">
+                                            <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                                                           Size="Size.Small"
+                                                           Color="Color.Error"
+                                                           Disabled="!_canMutate"
+                                                           OnClick="() => DeleteRowAsync(row)"
+                                                           aria-label="Delete row" />
+                                        </MudTooltip>
+                                    </div>
+                                </td>
                             }
                         </tr>
                     </Virtualize>
@@ -57,9 +93,173 @@ else
     </div>
 }
 
+@if (_rowMenuOpen && _menuRow is not null)
+{
+    <div class="results-row-menu-backdrop" @onclick="CloseRowMenu"></div>
+    <div class="results-row-menu" style="@($"left:{_menuX}px;top:{_menuY}px")">
+        <button type="button" disabled="@(!_canMutate)" @onclick="() => EditMenuRowAsync()">Edit</button>
+        <button type="button" class="danger" disabled="@(!_canMutate)" @onclick="() => DeleteMenuRowAsync()">Delete</button>
+        @if (!_canMutate)
+        {
+            <div class="results-row-menu-hint">Primary key required</div>
+        }
+    </div>
+}
+
 @code {
     [Parameter]
     public QueryResultModel? Result { get; set; }
+
+    [Parameter]
+    public TableDataContext? TableContext { get; set; }
+
+    [Parameter]
+    public EventCallback OnDataChanged { get; set; }
+
+    private bool ShowRowActions => TableContext is not null;
+    private bool _canMutate;
+
+    private bool _rowMenuOpen;
+    private object?[]? _menuRow;
+    private double _menuX;
+    private double _menuY;
+
+    protected override void OnParametersSet()
+    {
+        _canMutate = TableContext?.HasPrimaryKey == true;
+        if (!ShowRowActions)
+            CloseRowMenu();
+    }
+
+    private void OnRowContextMenu(MouseEventArgs e, object?[] row)
+    {
+        if (!ShowRowActions)
+            return;
+
+        _menuRow = row;
+        _menuX = e.ClientX;
+        _menuY = e.ClientY;
+        _rowMenuOpen = true;
+    }
+
+    private void CloseRowMenu()
+    {
+        _rowMenuOpen = false;
+        _menuRow = null;
+    }
+
+    private async Task EditMenuRowAsync()
+    {
+        object?[]? row = _menuRow;
+        CloseRowMenu();
+        if (row is not null)
+            await EditRowAsync(row);
+    }
+
+    private async Task DeleteMenuRowAsync()
+    {
+        object?[]? row = _menuRow;
+        CloseRowMenu();
+        if (row is not null)
+            await DeleteRowAsync(row);
+    }
+
+    private async Task EditRowAsync(object?[] row)
+    {
+        if (TableContext is null || Result is null || !_canMutate)
+            return;
+
+        var parameters = new DialogParameters<EditRecordDialog>
+        {
+            { x => x.Table, TableContext.Table },
+            { x => x.Columns, TableContext.Columns },
+            { x => x.ResultColumns, Result.Columns },
+            { x => x.Row, row },
+        };
+
+        var options = new DialogOptions
+        {
+            CloseOnEscapeKey = true,
+            MaxWidth = MaxWidth.Medium,
+            FullWidth = true,
+        };
+
+        IDialogReference dialog = await DialogService.ShowAsync<EditRecordDialog>("Edit record", parameters, options);
+        DialogResult? result = await dialog.Result;
+        if (result is { Canceled: false })
+            await OnDataChanged.InvokeAsync();
+    }
+
+    private async Task DeleteRowAsync(object?[] row)
+    {
+        if (TableContext is null || Result is null || !_canMutate)
+            return;
+
+        List<(string Column, object? Value)> pk = BuildPrimaryKeyValues(row);
+        if (pk.Count == 0)
+        {
+            Snackbar.Add("Primary key is required to delete a row.", Severity.Warning);
+            return;
+        }
+
+        var parameters = new DialogParameters<ConfirmDialog>
+        {
+            { x => x.Message, $"Delete this row from '{TableContext.Table}'?" },
+            { x => x.ConfirmText, "Delete" },
+            { x => x.ConfirmColor, Color.Error },
+        };
+
+        var options = new DialogOptions
+        {
+            CloseOnEscapeKey = true,
+            MaxWidth = MaxWidth.Small,
+            FullWidth = true,
+        };
+
+        IDialogReference dialog = await DialogService.ShowAsync<ConfirmDialog>("Delete row", parameters, options);
+        DialogResult? confirm = await dialog.Result;
+        if (confirm is null || confirm.Canceled)
+            return;
+
+        try
+        {
+            string sql = SqlBuilder.BuildDelete(TableContext.Table, pk);
+            QueryResultModel result = await Queries.ExecuteAsync(sql);
+            if (!result.Success)
+            {
+                Snackbar.Add(result.ErrorMessage ?? "Delete failed.", Severity.Error);
+                return;
+            }
+
+            Snackbar.Add("Row deleted.", Severity.Success);
+            await OnDataChanged.InvokeAsync();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    private List<(string Column, object? Value)> BuildPrimaryKeyValues(object?[] row)
+    {
+        List<(string Column, object? Value)> pk = [];
+        if (TableContext is null || Result is null)
+            return pk;
+
+        Dictionary<string, int> ordinals = new(StringComparer.OrdinalIgnoreCase);
+        for (int i = 0; i < Result.Columns.Count; i++)
+            ordinals[Result.Columns[i].Name] = i;
+
+        foreach (ColumnSchemaInfo col in TableContext.PrimaryKeyColumns)
+        {
+            if (!ordinals.TryGetValue(col.Name, out int index))
+                continue;
+            object? value = index < row.Length ? row[index] : null;
+            pk.Add((col.Name, value));
+        }
+
+        return pk;
+    }
 
     private static string FormatCell(object? value)
     {

@@ -16,6 +16,7 @@ builder.Services.AddMudServices(config =>
 builder.Services.AddScoped<CamusSessionService>();
 builder.Services.AddScoped<SchemaExplorerService>();
 builder.Services.AddScoped<QueryExecutionService>();
+builder.Services.AddScoped<ExportService>();
 
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
