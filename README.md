@@ -1,14 +1,45 @@
 # CamusDB Web Console
 
-Blazor Interactive Server + MudBlazor web UI for [CamusDB](https://github.com/camusdb/camusdb), built against the local [`CamusDB.Client`](../camusdb-dotnet) ADO.NET provider.
+Blazor Interactive Server + MudBlazor web UI for [CamusDB](https://github.com/camusdb/camusdb), built against the [`CamusDB.Client`](https://www.nuget.org/packages/CamusDB.Client) ADO.NET provider.
 
 ## Requirements
 
-- [.NET 10 SDK](https://dotnet.microsoft.com/download)
 - A running CamusDB instance (REST default port `5095`, gRPC `5096`)
-- Sibling checkout of `camusdb-dotnet` at `~/camusdb-dotnet` (ProjectReference)
+- Either [Docker](https://docs.docker.com/get-docker/) **or** the [.NET 10 SDK](https://dotnet.microsoft.com/download)
 
-## Run
+## Run with Docker
+
+No .NET install required. Pull and run the published image:
+
+```bash
+docker run --rm -p 8080:8080 \
+  -e CamusDB__Endpoint=http://host.docker.internal:5095 \
+  -e CamusDB__Database=demo \
+  camusdb/camusdb-webconsole:latest
+```
+
+Open [http://localhost:8080](http://localhost:8080).
+
+`host.docker.internal` reaches CamusDB on the host machine (Docker Desktop). On Linux without that DNS name, use the host’s LAN IP or `--add-host=host.docker.internal:host-gateway`.
+
+| Environment variable | Description |
+| --- | --- |
+| `CamusDB__Endpoint` | CamusDB base URL |
+| `CamusDB__Database` | Database name for the session |
+| `CamusDB__Protocol` | `rest` (default) or `grpc` |
+| `CamusDB__TimeoutSeconds` | Request timeout |
+| `CamusDB__MaxRows` | Cap on rows materialised into the results grid |
+
+You can also change these later via **Configure** in the app bar.
+
+To build and push the image yourself (multi-arch):
+
+```bash
+docker/publish.sh                 # build + push :version and :latest
+PUSH=0 docker/publish.sh          # build locally only
+```
+
+## Run from source
 
 ```bash
 cd src/CamusDB.WebConsole
