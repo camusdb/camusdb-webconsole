@@ -14,6 +14,7 @@ builder.Services.AddMudServices(config =>
 });
 
 builder.Services.AddScoped<CamusSessionService>();
+builder.Services.AddScoped<ConsolePreferencesService>();
 builder.Services.AddScoped<SchemaExplorerService>();
 builder.Services.AddScoped<QueryExecutionService>();
 builder.Services.AddScoped<ExportService>();

@@ -1,5 +1,6 @@
 @inject CamusSessionService Session
 @inject ISnackbar Snackbar
+@inject ConsolePreferencesService Prefs
 
 <MudDialog>
     <TitleContent>
@@ -84,6 +85,7 @@
                 _timeoutSeconds,
                 _maxRows);
 
+            await Prefs.SetDatabaseAsync(Session.Database);
             Snackbar.Add($"Connected to {Session.Database} @ {Session.Endpoint}", Severity.Success);
             MudDialog.Close(DialogResult.Ok(true));
         }

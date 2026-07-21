@@ -3,6 +3,7 @@
                           Id="@EditorId"
                           ConstructionOptions="ConstructionOptions"
                           OnDidInit="OnDidInitAsync"
+                          OnDidChangeModelContent="OnDidChangeModelContentAsync"
                           CssClass="sql-monaco" />
 </div>
 
@@ -22,6 +23,7 @@
     private StandaloneCodeEditor? _editor;
     private bool _ready;
     private string _lastSet = "";
+    private bool _suppressChange;
 
     private StandaloneEditorConstructionOptions ConstructionOptions(StandaloneCodeEditor _)
     {
@@ -58,6 +60,19 @@
         }
     }
 
+    private async Task OnDidChangeModelContentAsync(ModelContentChangedEvent _)
+    {
+        if (!_ready || _editor is null || _suppressChange)
+            return;
+
+        string value = await _editor.GetValue();
+        if (value == _lastSet)
+            return;
+
+        _lastSet = value;
+        await ValueChanged.InvokeAsync(value);
+    }
+
     protected override async Task OnParametersSetAsync()
     {
         if (!_ready || _editor is null)
@@ -74,8 +89,16 @@
             return;
         }
 
-        await _editor.SetValue(next);
-        _lastSet = next;
+        _suppressChange = true;
+        try
+        {
+            await _editor.SetValue(next);
+            _lastSet = next;
+        }
+        finally
+        {
+            _suppressChange = false;
+        }
     }
 
     public async Task<string> GetValueAsync()

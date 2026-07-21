@@ -1,5 +1,6 @@
 ﻿@page "/"
 @inject CamusSessionService Session
+@inject ConsolePreferencesService Prefs
 
 <PageTitle>CamusDB Web Console</PageTitle>
 
@@ -20,9 +21,22 @@
             return;
 
         _triedConnect = true;
+
+        try
+        {
+            await Prefs.EnsureLoadedAsync();
+            if (!string.IsNullOrWhiteSpace(Prefs.Current.Database))
+                Session.PreferDatabase(Prefs.Current.Database);
+        }
+        catch
+        {
+            // Continue with appsettings defaults.
+        }
+
         try
         {
             await Session.ConnectAsync();
+            await Prefs.SetDatabaseAsync(Session.Database);
         }
         catch
         {

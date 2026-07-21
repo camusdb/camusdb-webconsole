@@ -45,6 +45,18 @@ public sealed class CamusSessionService : IAsyncDisposable
 
     public event Action? Changed;
 
+    /// <summary>
+    /// Applies a preferred database name before the first connect (e.g. from localStorage).
+    /// Ignored once a connection is open.
+    /// </summary>
+    public void PreferDatabase(string database)
+    {
+        if (IsConnected || string.IsNullOrWhiteSpace(database))
+            return;
+
+        Database = database.Trim();
+    }
+
     public CamusConnection GetConnection()
     {
         if (_connection is null || _connection.State != ConnectionState.Open)

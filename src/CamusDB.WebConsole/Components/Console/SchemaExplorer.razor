@@ -1,6 +1,7 @@
 @inject CamusSessionService Session
 @inject SchemaExplorerService Schema
 @inject QueryExecutionService Queries
+@inject ConsolePreferencesService Prefs
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
 @implements IDisposable
@@ -231,6 +232,7 @@
     private bool _splitting;
     private double _splitStartX;
     private int _splitStartWidth;
+    private bool _layoutRestored;
 
     private string StatusLabel =>
         _databases.Count == 0
@@ -252,6 +254,28 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        if (firstRender && !_layoutRestored)
+        {
+            _layoutRestored = true;
+            try
+            {
+                await Prefs.EnsureLoadedAsync();
+                if (Prefs.Current.DrawerWidth is int width)
+                {
+                    int clamped = Math.Clamp(width, MinDrawerWidth, MaxDrawerWidth);
+                    if (clamped != _drawerWidth)
+                    {
+                        _drawerWidth = clamped;
+                        StateHasChanged();
+                    }
+                }
+            }
+            catch
+            {
+                // Keep default drawer width.
+            }
+        }
+
         if (firstRender && Session.IsConnected && _databases.Count == 0 && !_loading)
             await RefreshAsync();
     }
@@ -275,6 +299,9 @@
             }
 
             _wasConnected = connected;
+
+            if (connected && !string.IsNullOrWhiteSpace(Session.Database))
+                await Prefs.SetDatabaseAsync(Session.Database);
         });
     }
 
@@ -323,6 +350,7 @@
         try
         {
             await Session.ChangeDatabaseAsync(db.Name, notify: true);
+            await Prefs.SetDatabaseAsync(Session.Database);
             db.Expanded = true;
             if (!db.Loaded)
                 await LoadTablesAsync(db, activate: false);
@@ -632,7 +660,11 @@
             _drawerWidth = clamped;
     }
 
-    private void OnSplitPointerUp(PointerEventArgs e) => _splitting = false;
+    private void OnSplitPointerUp(PointerEventArgs e)
+    {
+        _splitting = false;
+        _ = Prefs.SetDrawerWidthAsync(_drawerWidth);
+    }
 
     public void Dispose() => Session.Changed -= OnSessionChanged;
 

@@ -1,5 +1,6 @@
 @inject CamusSessionService Session
 @inject QueryExecutionService Queries
+@inject ConsolePreferencesService Prefs
 @inject ISnackbar Snackbar
 @implements IDisposable
 
@@ -59,7 +60,8 @@
                 <div style="flex:1; min-height:0;" @key="ActiveTab.Id">
                     <QueryEditor @ref="_editor"
                                  EditorId="@($"sql-editor-{ActiveTab.Id}")"
-                                 @bind-Value="ActiveTab.Sql"
+                                 Value="@ActiveTab.Sql"
+                                 ValueChanged="OnSqlChangedAsync"
                                  OnRunRequested="RunAsync" />
                 </div>
             }
@@ -96,13 +98,67 @@
     private double _splitStartY;
     private int _splitStartHeight;
     private int _tabSeq = 1;
+    private bool _hydrated;
 
     private QueryTab? ActiveTab => _tabs.FirstOrDefault(t => t.Id == _activeId);
 
     protected override void OnInitialized()
     {
         Session.Changed += OnSessionChanged;
-        AddTabCore(selectSql: "SELECT 1");
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || _hydrated)
+            return;
+
+        _hydrated = true;
+
+        try
+        {
+            await Prefs.EnsureLoadedAsync();
+            ConsoleUiPreferences prefs = Prefs.Current;
+
+            if (prefs.EditorHeight is int height)
+                _editorHeight = Math.Clamp(height, 120, 700);
+
+            if (prefs.Tabs is { Count: > 0 })
+            {
+                _tabs.Clear();
+                foreach (PersistedQueryTab saved in prefs.Tabs)
+                {
+                    if (string.IsNullOrWhiteSpace(saved.Id))
+                        continue;
+
+                    _tabs.Add(new QueryTab
+                    {
+                        Id = saved.Id,
+                        Title = string.IsNullOrWhiteSpace(saved.Title) ? "SQL" : saved.Title,
+                        Sql = saved.Sql ?? "",
+                    });
+                }
+
+                if (_tabs.Count > 0)
+                {
+                    _tabSeq = prefs.TabSeq > 0
+                        ? prefs.TabSeq
+                        : Math.Max(1, _tabs.Count + 1);
+
+                    _activeId = _tabs.Any(t => t.Id == prefs.ActiveTabId)
+                        ? prefs.ActiveTabId!
+                        : _tabs[0].Id;
+                }
+            }
+        }
+        catch
+        {
+            // Fall back to a default tab below.
+        }
+
+        if (_tabs.Count == 0)
+            AddTabCore(selectSql: "SELECT 1", persist: false);
+
+        StateHasChanged();
     }
 
     public async Task InsertSqlAsync(string sql)
@@ -116,6 +172,7 @@
             ActiveTab.Sql = sql;
             ActiveTab.Title = TruncateTitle(sql);
             ActiveTab.DataContext = null;
+            await PersistTabsAsync();
         }
 
         StateHasChanged();
@@ -137,6 +194,7 @@
             ActiveTab.Title = $"data:{context.Table}";
             ActiveTab.DataContext = context;
             ActiveTab.LastResult = null;
+            await PersistTabsAsync();
         }
 
         StateHasChanged();
@@ -145,13 +203,22 @@
 
     private void OnSessionChanged() => InvokeAsync(StateHasChanged);
 
+    private async Task OnSqlChangedAsync(string sql)
+    {
+        if (ActiveTab is null)
+            return;
+
+        ActiveTab.Sql = sql;
+        await PersistTabsAsync(debounce: true);
+    }
+
     private async Task AddTabAsync()
     {
         await PersistActiveEditorAsync();
         AddTabCore(selectSql: "");
     }
 
-    private void AddTabCore(string selectSql)
+    private void AddTabCore(string selectSql, bool persist = true)
     {
         var tab = new QueryTab
         {
@@ -162,6 +229,9 @@
         _tabSeq++;
         _tabs.Add(tab);
         _activeId = tab.Id;
+
+        if (persist)
+            _ = PersistTabsAsync();
     }
 
     private async Task ActivateAsync(string id)
@@ -171,6 +241,7 @@
 
         await PersistActiveEditorAsync();
         _activeId = id;
+        await PersistTabsAsync();
     }
 
     private async Task CloseTabAsync(string id)
@@ -188,6 +259,8 @@
         _tabs.RemoveAt(index);
         if (_activeId == id)
             _activeId = _tabs[Math.Clamp(index, 0, _tabs.Count - 1)].Id;
+
+        await PersistTabsAsync();
     }
 
     private async Task PersistActiveEditorAsync()
@@ -203,6 +276,20 @@
         {
             // Editor may already be disposed while switching tabs.
         }
+    }
+
+    private Task PersistTabsAsync(bool debounce = false)
+    {
+        var snapshot = _tabs
+            .Select(t => new PersistedQueryTab
+            {
+                Id = t.Id,
+                Title = t.Title,
+                Sql = t.Sql ?? "",
+            })
+            .ToList();
+
+        return Prefs.SaveTabsAsync(snapshot, _activeId, _tabSeq, debounce);
     }
 
     private async Task RunAsync()
@@ -227,6 +314,8 @@
 
         if (ActiveTab.DataContext is null)
             ActiveTab.Title = TruncateTitle(sql);
+
+        await PersistTabsAsync();
 
         _running = true;
         _cts = new CancellationTokenSource();
@@ -270,7 +359,11 @@
             _editorHeight = clamped;
     }
 
-    private void OnSplitPointerUp(PointerEventArgs e) => _splitting = false;
+    private void OnSplitPointerUp(PointerEventArgs e)
+    {
+        _splitting = false;
+        _ = Prefs.SetEditorHeightAsync(_editorHeight);
+    }
 
     private static string TruncateTitle(string sql)
     {
@@ -285,6 +378,12 @@
         Session.Changed -= OnSessionChanged;
         _cts?.Cancel();
         _cts?.Dispose();
+
+        if (_hydrated && _tabs.Count > 0)
+        {
+            // Best-effort flush of the latest SQL before the circuit tears down.
+            _ = PersistTabsAsync();
+        }
     }
 
     private sealed class QueryTab
