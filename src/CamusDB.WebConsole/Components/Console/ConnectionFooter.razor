@@ -12,7 +12,15 @@
         }
         @if (Session.IsConnected && !string.IsNullOrEmpty(Session.ServerVersion))
         {
-            <text> · v@authorSession.ServerVersion</text>
+            <text> · v</text>@Session.ServerVersion
+        }
+        @if (Session.IsAuthenticated)
+        {
+            <text> · </text>@(Session.UsesSuppliedToken ? "token auth" : Session.User)
+        }
+        else if (Session.IsConnected)
+        {
+            <text> · no auth</text>
         }
         @if (!Session.IsConnected && !string.IsNullOrEmpty(Session.LastError))
         {

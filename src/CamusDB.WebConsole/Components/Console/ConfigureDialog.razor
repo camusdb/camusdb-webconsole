@@ -21,6 +21,54 @@
                 <MudSelectItem Value="@("rest")">REST</MudSelectItem>
                 <MudSelectItem Value="@("grpc")">gRPC</MudSelectItem>
             </MudSelect>
+
+            <MudDivider Class="mt-1" />
+            <MudText Typo="Typo.subtitle2" Class="mud-text-secondary">
+                Authentication
+            </MudText>
+            <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                Leave empty against a server with authentication disabled — the default for a fresh
+                CamusDB install. The password is exchanged once for a short-lived token and is never
+                stored in the browser.
+            </MudText>
+
+            <MudTabs Elevation="0"
+                     Rounded="true"
+                     ActivePanelIndex="_authMode"
+                     ActivePanelIndexChanged="OnAuthModeChanged">
+                <MudTabPanel Text="User / password">
+                    <MudStack Spacing="3" Class="mt-3">
+                        <MudTextField @bind-Value="_user"
+                                      Label="User"
+                                      Variant="Variant.Outlined"
+                                      Immediate="true"
+                                      autocomplete="username"
+                                      HelperText="Empty connects without authentication." />
+                        <MudTextField @bind-Value="_password"
+                                      Label="Password"
+                                      Variant="Variant.Outlined"
+                                      Immediate="true"
+                                      autocomplete="current-password"
+                                      InputType="@(_showPassword ? InputType.Text : InputType.Password)"
+                                      Adornment="Adornment.End"
+                                      AdornmentIcon="@(_showPassword ? Icons.Material.Filled.VisibilityOff : Icons.Material.Filled.Visibility)"
+                                      OnAdornmentClick="TogglePasswordVisibility"
+                                      AdornmentAriaLabel="Show password" />
+                    </MudStack>
+                </MudTabPanel>
+                <MudTabPanel Text="Access token">
+                    <MudStack Spacing="3" Class="mt-3">
+                        <MudTextField @bind-Value="_accessToken"
+                                      Label="Access token"
+                                      Variant="Variant.Outlined"
+                                      Immediate="true"
+                                      InputType="InputType.Password"
+                                      HelperText="A token obtained elsewhere, sent verbatim. The console cannot renew it, so the session ends when the server expires it." />
+                    </MudStack>
+                </MudTabPanel>
+            </MudTabs>
+
+            <MudDivider Class="mt-1" />
             <MudNumericField @bind-Value="_timeoutSeconds"
                              Label="Timeout (seconds)"
                              Variant="Variant.Outlined"
@@ -50,24 +98,61 @@
 </MudDialog>
 
 @code {
+    private const int UserPasswordTab = 0;
+    private const int AccessTokenTab = 1;
+
     [CascadingParameter]
     private IMudDialogInstance MudDialog { get; set; } = null!;
 
     private string _endpoint = "";
     private string _database = "";
     private string _protocol = "rest";
+    private string _user = "";
+    private string _password = "";
+    private string _accessToken = "";
+    private int _authMode = UserPasswordTab;
+    private bool _showPassword;
     private int _timeoutSeconds = 30;
     private int _maxRows = 1000;
     private string? _error;
     private bool _busy;
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
         _endpoint = Session.Endpoint;
         _database = Session.Database;
         _protocol = Session.Protocol;
         _timeoutSeconds = Session.TimeoutSeconds;
         _maxRows = Session.MaxRows;
+        _user = Session.User;
+        _authMode = Session.UsesSuppliedToken ? AccessTokenTab : UserPasswordTab;
+
+        // The password is never persisted; the user name is, so a reconnect only needs the secret.
+        if (string.IsNullOrEmpty(_user))
+        {
+            try
+            {
+                await Prefs.EnsureLoadedAsync();
+                _user = Prefs.Current.User ?? "";
+            }
+            catch
+            {
+                // Storage unavailable; start with an empty user.
+            }
+        }
+    }
+
+    private void TogglePasswordVisibility() => _showPassword = !_showPassword;
+
+    /// <summary>The driver treats a token and a user/password pair as exclusive, so switching clears the other.</summary>
+    private void OnAuthModeChanged(int index)
+    {
+        _authMode = index;
+
+        if (index == AccessTokenTab)
+            _password = "";
+        else
+            _accessToken = "";
     }
 
     private void Cancel() => MudDialog.Cancel();
@@ -78,15 +163,25 @@
         _error = null;
         try
         {
+            bool useToken = _authMode == AccessTokenTab;
+
             await Session.ConfigureAndConnectAsync(
                 _endpoint,
                 _database,
                 _protocol,
                 _timeoutSeconds,
-                _maxRows);
+                _maxRows,
+                user: useToken ? null : _user,
+                password: useToken ? null : _password,
+                accessToken: useToken ? _accessToken : null);
 
             await Prefs.SetDatabaseAsync(Session.Database);
-            Snackbar.Add($"Connected to {Session.Database} @ {Session.Endpoint}", Severity.Success);
+            await Prefs.SetUserAsync(Session.User);
+
+            string identity = Session.IsAuthenticated
+                ? Session.UsesSuppliedToken ? " as a token holder" : $" as {Session.User}"
+                : "";
+            Snackbar.Add($"Connected to {Session.Database} @ {Session.Endpoint}{identity}", Severity.Success);
             MudDialog.Close(DialogResult.Ok(true));
         }
         catch (Exception ex)

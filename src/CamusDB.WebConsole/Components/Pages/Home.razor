@@ -1,6 +1,7 @@
 ﻿@page "/"
 @inject CamusSessionService Session
 @inject ConsolePreferencesService Prefs
+@inject IDialogService DialogService
 
 <PageTitle>CamusDB Web Console</PageTitle>
 
@@ -27,6 +28,8 @@
             await Prefs.EnsureLoadedAsync();
             if (!string.IsNullOrWhiteSpace(Prefs.Current.Database))
                 Session.PreferDatabase(Prefs.Current.Database);
+            if (!string.IsNullOrWhiteSpace(Prefs.Current.User))
+                Session.PreferUser(Prefs.Current.User);
         }
         catch
         {
@@ -42,6 +45,24 @@
         {
             // Footer / Configure show the error; stay on the console.
         }
+
+        // An auth-enabled server rejects the unauthenticated autoconnect: ask for credentials rather
+        // than leaving the console looking simply unreachable.
+        if (Session.RequiresAuthentication)
+            await OpenConfigureAsync();
+    }
+
+    private async Task OpenConfigureAsync()
+    {
+        var options = new DialogOptions
+        {
+            CloseOnEscapeKey = true,
+            MaxWidth = MaxWidth.Small,
+            FullWidth = true,
+        };
+
+        IDialogReference dialog = await DialogService.ShowAsync<ConfigureDialog>("Configure connection", options);
+        await dialog.Result;
     }
 
     private async Task InsertSqlAsync(string sql)

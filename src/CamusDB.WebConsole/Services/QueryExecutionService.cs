@@ -87,7 +87,7 @@ public sealed class QueryExecutionService
         }
         catch (CamusException ex)
         {
-            return QueryResultModel.Failure(ex.Message, ex.Code, total.Elapsed);
+            return QueryResultModel.Failure(CamusSessionService.Describe(ex), ex.Code, total.Elapsed);
         }
         catch (Exception ex)
         {

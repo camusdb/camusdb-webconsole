@@ -253,9 +253,20 @@ public sealed class SchemaExplorerService
             ChildrenLoaded = true,
         };
 
-        IReadOnlyList<ColumnSchemaInfo> columns =
-            await ListColumnsAsync(table, cancellationToken).ConfigureAwait(false);
-        columnsFolder.Name = $"Columns ({columns.Count})";
+        // SHOW COLUMNS / SHOW INDEXES need SELECT on the table. A least-privilege user can see the
+        // table name from SHOW TABLES but not its shape, so a denial marks the folder instead of
+        // failing the whole expand.
+        IReadOnlyList<ColumnSchemaInfo> columns = [];
+        try
+        {
+            columns = await ListColumnsAsync(table, cancellationToken).ConfigureAwait(false);
+            columnsFolder.Name = $"Columns ({columns.Count})";
+        }
+        catch (CamusException ex) when (ex.Code == CamusSessionService.PrivilegeDeniedCode)
+        {
+            columnsFolder.Name = "Columns (no privilege)";
+        }
+
         foreach (ColumnSchemaInfo column in columns)
         {
             columnsFolder.Children.Add(new CamusSchemaNode
@@ -280,9 +291,17 @@ public sealed class SchemaExplorerService
             ChildrenLoaded = true,
         };
 
-        IReadOnlyList<IndexSchemaInfo> indexes =
-            await ListIndexesAsync(table, cancellationToken).ConfigureAwait(false);
-        indexesFolder.Name = $"Indexes ({indexes.Count})";
+        IReadOnlyList<IndexSchemaInfo> indexes = [];
+        try
+        {
+            indexes = await ListIndexesAsync(table, cancellationToken).ConfigureAwait(false);
+            indexesFolder.Name = $"Indexes ({indexes.Count})";
+        }
+        catch (CamusException ex) when (ex.Code == CamusSessionService.PrivilegeDeniedCode)
+        {
+            indexesFolder.Name = "Indexes (no privilege)";
+        }
+
         foreach (IndexSchemaInfo index in indexes)
         {
             indexesFolder.Children.Add(new CamusSchemaNode

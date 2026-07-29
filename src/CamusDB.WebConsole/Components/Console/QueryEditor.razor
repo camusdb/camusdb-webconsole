@@ -1,3 +1,5 @@
+@inject IJSRuntime JS
+
 <div class="query-editor-host" style="height: 100%;">
     <StandaloneCodeEditor @ref="_editor"
                           Id="@EditorId"
@@ -30,8 +32,10 @@
         return new StandaloneEditorConstructionOptions
         {
             AutomaticLayout = true,
-            Language = "sql",
-            Theme = "vs-dark",
+            // CamusDB-specific SQL mode registered by wwwroot/js/camus-sql.js.
+            Language = "camussql",
+            // vs-dark plus the console's string/quoted-identifier colors; defined in camus-sql.js.
+            Theme = "camus-dark",
             Value = Value ?? "",
             Minimap = new EditorMinimapOptions { Enabled = false },
             FontFamily = "IBM Plex Mono, Menlo, Consolas, monospace",
@@ -49,6 +53,17 @@
     {
         _ready = true;
         _lastSet = Value ?? "";
+
+        // monaco's AMD modules resolve asynchronously, so the camussql language may not have existed
+        // when this editor was constructed. By now monaco is definitely loaded; retag the model.
+        try
+        {
+            await JS.InvokeAsync<bool>("camusSql.applyToEditor", EditorId);
+        }
+        catch (JSException)
+        {
+            // Highlighting is cosmetic — never let it break the editor.
+        }
 
         if (_editor is not null)
         {

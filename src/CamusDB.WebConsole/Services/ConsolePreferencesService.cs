@@ -91,6 +91,18 @@ public sealed class ConsolePreferencesService
         await PersistAsync().ConfigureAwait(false);
     }
 
+    /// <summary>Remembers the user name only — never the password.</summary>
+    public async Task SetUserAsync(string? user)
+    {
+        await EnsureLoadedAsync().ConfigureAwait(false);
+        string? trimmed = string.IsNullOrWhiteSpace(user) ? null : user.Trim();
+        if (string.Equals(_prefs.User, trimmed, StringComparison.Ordinal))
+            return;
+
+        _prefs.User = trimmed;
+        await PersistAsync().ConfigureAwait(false);
+    }
+
     public async Task SaveTabsAsync(
         IReadOnlyList<PersistedQueryTab> tabs,
         string activeTabId,

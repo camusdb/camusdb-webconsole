@@ -721,6 +721,12 @@ html, body {
     font-size: 0.8rem;
 }
 
+.user-chip {
+    margin-right: 12px;
+    font-family: var(--camus-mono);
+    font-size: 0.8rem;
+}
+
 .run-btn {
     background: var(--camus-green) !important;
     color: #0b1a10 !important;

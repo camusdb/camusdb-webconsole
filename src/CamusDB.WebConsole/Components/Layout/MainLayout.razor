@@ -1,6 +1,7 @@
 ﻿@inherits LayoutComponentBase
 @inject CamusSessionService Session
 @inject IDialogService DialogService
+@inject ISnackbar Snackbar
 @implements IDisposable
 
 <MudThemeProvider Theme="_theme" IsDarkMode="true" />
@@ -22,6 +23,21 @@
             </MudChip>
         }
         <MudSpacer />
+        @if (Session.IsAuthenticated)
+        {
+            <MudTooltip Text="@(Session.UsesSuppliedToken ? "Authenticated with a supplied access token" : $"Authenticated as {Session.User}")">
+                <MudChip T="string"
+                         Size="Size.Small"
+                         Variant="Variant.Outlined"
+                         Color="Color.Success"
+                         Icon="@Icons.Material.Filled.Lock"
+                         Class="user-chip"
+                         OnClose="SignOutAsync"
+                         CloseIcon="@Icons.Material.Filled.Logout">
+                    @(Session.UsesSuppliedToken ? "token" : Session.User)
+                </MudChip>
+            </MudTooltip>
+        }
         <MudButton Variant="Variant.Filled"
                    Size="Size.Small"
                    Class="configure-btn"
@@ -85,6 +101,17 @@
 
         IDialogReference dialog = await DialogService.ShowAsync<ConfigureDialog>("Configure connection", options);
         await dialog.Result;
+    }
+
+    /// <summary>
+    /// Revokes the token and drops the connection, then reopens Configure so the console is not left
+    /// silently disconnected.
+    /// </summary>
+    private async Task SignOutAsync()
+    {
+        await Session.SignOutAsync();
+        Snackbar.Add("Signed out.", Severity.Normal);
+        await OpenConfigureAsync();
     }
 
     public void Dispose() => Session.Changed -= OnSessionChanged;
