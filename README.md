@@ -133,28 +133,84 @@ TLS terminates in front of it.
 | `CADB0518` | Too many login attempts for that account |
 | `CADB0519` | Credentials sent over plaintext where the server requires TLS |
 
-## Features (v1)
+## Features
 
-- Dark console layout: app bar, schema sidebar, SQL editor, results grid, connection footer
-- Schema browser via `SHOW DATABASES` / `SHOW TABLES` / `SHOW COLUMNS FROM` / `SHOW INDEXES FROM` (plus branches)
-- Monaco SQL editor with **Run query** and Ctrl/Cmd+Enter
+Dark console layout throughout: app bar, resizable schema sidebar, SQL editor, results grid, and a
+connection footer showing endpoint, protocol, database, identity, and server version.
+
+### SQL editor
+
+- Monaco editor with **Run query** and Ctrl/Cmd+Enter
+- **Select part of the SQL to run only that.** With a selection, both the button and Ctrl/Cmd+Enter
+  execute just the highlighted text and the button reads *Run selection*; with nothing selected they
+  run the whole tab as before. Programmatic re-runs (a data tab refreshing after a row edit) always
+  run the tab's own SQL.
 - CamusDB-specific SQL highlighting and keyword/function completion (`wwwroot/js/camus-sql.js`), with
-  the word lists derived from the server's own lexer and scalar-function registry
-- Multi-tab queries, execution timings, cancellable runs
-- Result grid with type-aware cell styling and row cap warning
+  the word lists derived from the server's own lexer and scalar-function registry. Backtick-quoted
+  identifiers render salmon, string literals purple; both colours live in the `camus-dark` theme at the
+  top of that file.
+- Multi-tab queries with per-tab titles, execution timings, and cancellable runs
+- Result grid with type-aware cell styling (`NULL`, numbers, booleans, timestamps, blobs as hex) and a
+  row-cap warning when the result was truncated at `MaxRows`
+
+### Schema browser
+
+The sidebar lists databases and tables via `SHOW DATABASES` / `SHOW TABLES`, expanding a table into its
+columns and indexes with `SHOW COLUMNS FROM` / `SHOW INDEXES FROM`. Filter by name, drag the edge to
+resize, click a database to make it the session database.
+
+- Double-click a table to insert `SELECT * FROM {table} LIMIT 100` into the active tab
+- **Right-click a database** → *Create a Table* (column name/type/`NOT NULL`/PK builder) or *Drop
+  Database* (confirmation required)
+- **Right-click a table** → *Edit/View Data*, *Drop Table* (confirmation required), *Export Table*, or
+  *Add an Index* (pick columns, optionally `UNIQUE`)
+
+### Row editing
+
+*Edit/View Data* on a table opens a data tab: it runs `SELECT *` and attaches the table's schema to the
+result, which turns on per-row **Edit** and **Delete** actions (also on right-click of a row).
+
+- The edit dialog is generated from the column schema — primary-key fields are read-only, nullable
+  fields get a **NULL** toggle, and values are validated against the column type before the statement
+  is built
+- `UPDATE` and `DELETE` are keyed on the primary key, so both actions are disabled with a *Primary key
+  required* hint on tables without one
+- The grid re-runs its query after a successful edit or delete
+
+### Export
+
+*Export Table* writes the table to **CSV** or **JSON** and downloads it in the browser. CSV goes through
+CsvHelper (proper quoting/escaping); JSON emits an array of objects with ISO-8601 dates, hex blobs, and
+`D`-format GUIDs. Exports run through the same query path, so they are capped at `MaxRows` and the
+dialog warns when the result was truncated.
+
+### Authentication
+
+User/password login or a supplied bearer token, per browser session — see
+[Authentication](#authentication) above.
+
+### Remembered UI state
+
+Drawer width, editor/results split, active database, user name, and all open SQL tabs (with their text)
+are persisted to `localStorage` and restored on the next visit. Passwords and tokens never are.
 
 ## Project layout
 
 ```
 src/CamusDB.WebConsole/
-  Components/Console/   # Schema, editor, results, configure
+  Components/Console/   # Schema tree, editor, results grid, dialogs (configure, create table,
+                        # add index, edit record, export, confirm)
   Components/Layout/    # Main shell + theme
-  Services/             # Session, schema, query execution
+  Services/             # Session, schema, query execution, export, preferences, SQL builder
+  Models/               # Query results, schema nodes, table data context, UI preferences
   Options/              # CamusDbOptions
+  wwwroot/js/           # camus-sql.js (Monaco language), download.js, storage.js
 ```
 
 ## Notes
 
-- `CamusDB.Client` buffers full query responses; keep `MaxRows` reasonable for large tables.
+- `CamusDB.Client` buffers full query responses; keep `MaxRows` reasonable for large tables — it caps
+  the results grid *and* exports.
 - `CamusSchemaMetadataClient` is not used — metadata endpoints are still stubs in the client; the console uses SQL `SHOW` instead.
-- Double-click a table in the schema tree to insert `SELECT * FROM {table} LIMIT 100`.
+- Schema-tree DDL actions (create/drop table, drop database, create index) are ordinary SQL statements;
+  anything they can't express is still available by typing it in the editor.

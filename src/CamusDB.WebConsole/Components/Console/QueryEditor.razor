@@ -6,6 +6,7 @@
                           ConstructionOptions="ConstructionOptions"
                           OnDidInit="OnDidInitAsync"
                           OnDidChangeModelContent="OnDidChangeModelContentAsync"
+                          OnDidChangeCursorSelection="OnDidChangeCursorSelectionAsync"
                           CssClass="sql-monaco" />
 </div>
 
@@ -22,10 +23,18 @@
     [Parameter]
     public EventCallback OnRunRequested { get; set; }
 
+    /// <summary>
+    /// Raised when the editor gains or loses a non-empty selection, so the toolbar can say whether
+    /// running will execute the selection or the whole tab.
+    /// </summary>
+    [Parameter]
+    public EventCallback<bool> HasSelectionChanged { get; set; }
+
     private StandaloneCodeEditor? _editor;
     private bool _ready;
     private string _lastSet = "";
     private bool _suppressChange;
+    private bool _hasSelection;
 
     private StandaloneEditorConstructionOptions ConstructionOptions(StandaloneCodeEditor _)
     {
@@ -88,6 +97,22 @@
         await ValueChanged.InvokeAsync(value);
     }
 
+    /// <summary>
+    /// Monaco fires this on every cursor move, so only surface the transitions between "has a
+    /// selection" and "does not" — the toolbar is the only thing that cares.
+    /// </summary>
+    private async Task OnDidChangeCursorSelectionAsync(CursorSelectionChangedEvent e)
+    {
+        bool hasSelection = e.Selection is { } s
+            && (s.StartLineNumber != s.EndLineNumber || s.StartColumn != s.EndColumn);
+
+        if (hasSelection == _hasSelection)
+            return;
+
+        _hasSelection = hasSelection;
+        await HasSelectionChanged.InvokeAsync(hasSelection);
+    }
+
     protected override async Task OnParametersSetAsync()
     {
         if (!_ready || _editor is null)
@@ -124,6 +149,27 @@
         string value = await _editor.GetValue();
         _lastSet = value;
         return value;
+    }
+
+    /// <summary>
+    /// The currently selected text, or <c>null</c> when nothing (or only whitespace) is selected.
+    /// Read at run time rather than tracked, so it always reflects what the user can see.
+    /// </summary>
+    public async Task<string?> GetSelectedTextAsync()
+    {
+        if (_editor is null || !_ready)
+            return null;
+
+        Selection? selection = await _editor.GetSelection();
+        if (selection is null)
+            return null;
+
+        TextModel? model = await _editor.GetModel();
+        if (model is null)
+            return null;
+
+        string selected = await model.GetValueInRange(selection, EndOfLinePreference.TextDefined);
+        return string.IsNullOrWhiteSpace(selected) ? null : selected;
     }
 
     public async Task SyncValueAsync()

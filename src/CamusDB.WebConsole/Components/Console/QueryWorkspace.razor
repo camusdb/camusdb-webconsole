@@ -52,7 +52,7 @@
                            StartIcon="@Icons.Material.Filled.PlayArrow"
                            Disabled="_running || !Session.IsConnected"
                            OnClick="RunAsync">
-                    Run query
+                    @(_hasSelection ? "Run selection" : "Run query")
                 </MudButton>
             </div>
             @if (ActiveTab is not null)
@@ -62,6 +62,7 @@
                                  EditorId="@($"sql-editor-{ActiveTab.Id}")"
                                  Value="@ActiveTab.Sql"
                                  ValueChanged="OnSqlChangedAsync"
+                                 HasSelectionChanged="OnHasSelectionChanged"
                                  OnRunRequested="RunAsync" />
                 </div>
             }
@@ -99,6 +100,7 @@
     private int _splitStartHeight;
     private int _tabSeq = 1;
     private bool _hydrated;
+    private bool _hasSelection;
 
     private QueryTab? ActiveTab => _tabs.FirstOrDefault(t => t.Id == _activeId);
 
@@ -198,10 +200,22 @@
         }
 
         StateHasChanged();
-        await RunAsync();
+
+        // Programmatic: run the SELECT we just wrote, not a selection left over from the old content.
+        _hasSelection = false;
+        await RunCoreAsync(useSelection: false);
     }
 
     private void OnSessionChanged() => InvokeAsync(StateHasChanged);
+
+    private void OnHasSelectionChanged(bool hasSelection)
+    {
+        if (_hasSelection == hasSelection)
+            return;
+
+        _hasSelection = hasSelection;
+        StateHasChanged();
+    }
 
     private async Task OnSqlChangedAsync(string sql)
     {
@@ -229,6 +243,7 @@
         _tabSeq++;
         _tabs.Add(tab);
         _activeId = tab.Id;
+        _hasSelection = false;
 
         if (persist)
             _ = PersistTabsAsync();
@@ -241,6 +256,8 @@
 
         await PersistActiveEditorAsync();
         _activeId = id;
+        // Each tab gets its own keyed editor, so the incoming one starts with nothing selected.
+        _hasSelection = false;
         await PersistTabsAsync();
     }
 
@@ -258,7 +275,10 @@
 
         _tabs.RemoveAt(index);
         if (_activeId == id)
+        {
             _activeId = _tabs[Math.Clamp(index, 0, _tabs.Count - 1)].Id;
+            _hasSelection = false;
+        }
 
         await PersistTabsAsync();
     }
@@ -292,7 +312,14 @@
         return Prefs.SaveTabsAsync(snapshot, _activeId, _tabSeq, debounce);
     }
 
-    private async Task RunAsync()
+    /// <summary>Runs the editor selection when there is one, otherwise the whole tab.</summary>
+    private Task RunAsync() => RunCoreAsync(useSelection: true);
+
+    /// <param name="useSelection">
+    /// False for programmatic re-runs (a row edit refreshing its grid), which must always execute the
+    /// tab's own SQL — never whatever the user happens to have highlighted.
+    /// </param>
+    private async Task RunCoreAsync(bool useSelection)
     {
         if (ActiveTab is null || _running)
             return;
@@ -305,15 +332,31 @@
 
         await PersistActiveEditorAsync();
 
-        string sql = ActiveTab.Sql?.Trim() ?? "";
+        string tabSql = ActiveTab.Sql?.Trim() ?? "";
+
+        string? selected = null;
+        if (useSelection && _editor is not null)
+        {
+            try
+            {
+                selected = await _editor.GetSelectedTextAsync();
+            }
+            catch
+            {
+                // Fall back to the whole tab if the editor is mid-teardown.
+            }
+        }
+
+        string sql = selected?.Trim() ?? tabSql;
         if (sql.Length == 0)
         {
             Snackbar.Add("SQL is empty.", Severity.Warning);
             return;
         }
 
-        if (ActiveTab.DataContext is null)
-            ActiveTab.Title = TruncateTitle(sql);
+        // The title names the tab, so keep it on the tab's own SQL rather than the selected fragment.
+        if (ActiveTab.DataContext is null && selected is null)
+            ActiveTab.Title = TruncateTitle(tabSql);
 
         await PersistTabsAsync();
 
@@ -337,7 +380,7 @@
         }
     }
 
-    private Task RefreshActiveDataAsync() => RunAsync();
+    private Task RefreshActiveDataAsync() => RunCoreAsync(useSelection: false);
 
     private void CancelRun() => _cts?.Cancel();
 
