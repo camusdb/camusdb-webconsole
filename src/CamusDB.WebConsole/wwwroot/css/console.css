@@ -743,3 +743,202 @@ html, body {
     color: var(--camus-muted);
     text-align: center;
 }
+
+.admin-btn {
+    border-color: var(--camus-border) !important;
+    color: var(--camus-text) !important;
+    margin-right: 8px;
+}
+
+.admin-page {
+    padding: 0;
+}
+
+.admin-header {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--camus-border);
+}
+
+.admin-title {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 500;
+}
+
+.admin-subtitle {
+    color: var(--camus-muted);
+    font-size: 0.8125rem;
+}
+
+.admin-tabbar {
+    display: flex;
+    gap: 2px;
+    padding: 0 14px;
+    border-bottom: 1px solid var(--camus-border);
+    background: var(--camus-surface);
+    flex-shrink: 0;
+}
+
+.admin-tab {
+    appearance: none;
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--camus-muted);
+    font-family: var(--camus-font);
+    font-size: 0.8125rem;
+    padding: 8px 14px;
+    cursor: pointer;
+}
+
+.admin-tab:hover {
+    color: var(--camus-text);
+}
+
+.admin-tab.active {
+    color: var(--camus-green);
+    border-bottom-color: var(--camus-green);
+}
+
+.admin-pane {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.admin-pane-hidden {
+    display: none;
+}
+
+.admin-panel {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.admin-controls {
+    display: flex;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 14px;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--camus-border);
+    flex-shrink: 0;
+}
+
+.admin-pattern-field {
+    max-width: 320px;
+}
+
+.admin-alert {
+    margin: 10px 14px 0;
+}
+
+.admin-denied {
+    padding: 16px;
+    max-width: 720px;
+}
+
+.admin-note {
+    padding: 8px 14px;
+    border-top: 1px solid var(--camus-border);
+    color: var(--camus-muted);
+    font-size: 0.75rem;
+    flex-shrink: 0;
+}
+
+.admin-note code {
+    font-family: var(--camus-mono);
+    color: var(--camus-text);
+}
+
+/* A number that moved between two readings — the only kind worth acting on, since counters and
+   histograms are cumulative since process start. */
+.cell-delta {
+    color: var(--camus-accent);
+}
+
+/* A histogram whose worst observation grew inside the window: a new outlier landed. */
+.cell-max-grew {
+    color: var(--camus-pink);
+    font-weight: 600;
+}
+
+.cell-masked {
+    color: var(--camus-muted);
+    letter-spacing: 1px;
+}
+
+.col-type-cell {
+    color: var(--camus-muted);
+}
+
+.var-value-set {
+    color: var(--camus-green);
+}
+
+.var-source-set {
+    color: var(--camus-accent);
+}
+
+.admin-busy {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--camus-muted);
+    font-size: 0.8125rem;
+}
+
+.admin-gc,
+.admin-chain {
+    margin: 10px 14px 0;
+    padding: 10px 12px;
+    border: 1px solid var(--camus-border);
+    border-radius: 4px;
+    background: var(--camus-surface-2);
+    font-size: 0.8125rem;
+    max-height: 220px;
+    overflow: auto;
+}
+
+.admin-gc ul,
+.admin-chain-list {
+    margin: 6px 0 0;
+    padding-left: 20px;
+    font-family: var(--camus-mono);
+    font-size: 0.75rem;
+    color: var(--camus-muted);
+}
+
+.admin-chain-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.admin-chain-head span {
+    color: var(--camus-muted);
+    margin-right: auto;
+}
+
+.admin-chain-window {
+    margin-top: 4px;
+    font-family: var(--camus-mono);
+    font-size: 0.75rem;
+    color: var(--camus-timestamp);
+}
+
+.admin-invalid-count {
+    color: var(--camus-danger);
+}
+
+.backup-invalid td {
+    color: var(--camus-danger);
+}

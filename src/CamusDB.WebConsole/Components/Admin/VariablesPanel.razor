@@ -1,0 +1,169 @@
+@inject AdminService Admin
+
+<div class="admin-panel">
+    <div class="admin-controls">
+        <MudTextField @bind-Value="_pattern"
+                      Label="LIKE pattern"
+                      Placeholder="ttl_%"
+                      Variant="Variant.Outlined"
+                      Margin="Margin.Dense"
+                      Immediate="true"
+                      Clearable="true"
+                      Class="admin-pattern-field"
+                      HelperText="@AdminService.PatternHelp"
+                      OnKeyDown="OnPatternKeyDown" />
+
+        <MudButton Variant="Variant.Filled"
+                   Color="Color.Primary"
+                   Size="Size.Small"
+                   StartIcon="@Icons.Material.Filled.Refresh"
+                   Disabled="_busy"
+                   OnClick="RefreshAsync">
+            @(_busy ? "Reading…" : "Refresh")
+        </MudButton>
+
+        <MudSwitch T="bool"
+                   Value="_onlyCustomized"
+                   ValueChanged="OnOnlyCustomizedChanged"
+                   Color="Color.Primary"
+                   Label="Only non-default" />
+    </div>
+
+    @if (_error is not null)
+    {
+        <MudAlert Severity="Severity.Error" Dense="true" Class="admin-alert">@_error</MudAlert>
+    }
+
+    <div class="results-toolbar">
+        <span>@_rows.Count.ToString("N0") variable@(_rows.Count == 1 ? "" : "s")</span>
+        @if (_all.Count > 0)
+        {
+            <span>@_customizedCount.ToString("N0") set by config, env, or cli</span>
+        }
+        <span class="results-table-badge">effective values</span>
+    </div>
+
+    <div class="results-grid-wrap">
+        @if (!_loaded)
+        {
+            <div class="empty-state">Loading…</div>
+        }
+        else if (_all.Count == 0)
+        {
+            <div class="empty-state">
+                @(string.IsNullOrWhiteSpace(_pattern)
+                    ? "No variables returned."
+                    : "Nothing matched the pattern. Matching is case-sensitive and variable names are lowercase.")
+            </div>
+        }
+        else if (_rows.Count == 0)
+        {
+            <div class="empty-state">Every variable on this node is at its built-in default.</div>
+        }
+        else
+        {
+            <table class="results-table">
+                <thead>
+                    <tr>
+                        <th>variable</th>
+                        <th>value</th>
+                        <th>type</th>
+                        <th>default</th>
+                        <th>source</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <Virtualize Items="_rows" Context="row" ItemSize="28">
+                        <tr>
+                            <td>@row.Variable</td>
+                            <td class="@ValueClass(row)">
+                                @(row.Value is null ? "NULL" : row.Value.Length == 0 ? "(empty)" : row.Value)
+                            </td>
+                            <td class="col-type-cell">@row.Type</td>
+                            <td class="@(row.Default is null ? "cell-null" : null)">
+                                @(row.Default is null ? "NULL" : row.Default.Length == 0 ? "(empty)" : row.Default)
+                            </td>
+                            <td class="@(row.IsCustomized ? "var-source-set" : "cell-null")">@row.SourceLayer</td>
+                        </tr>
+                    </Virtualize>
+                </tbody>
+            </table>
+        }
+    </div>
+
+    <div class="admin-note">
+        Values render the way <code>config.yml</code> spells them, so a value read here can be pasted
+        back into a file unchanged. Secrets show as <code>********</code>; deployment and topology keys
+        (ports, peers, node name, diagnostics) live on a different configuration object and are not
+        listed. There is no <code>SET</code> — changing a setting means editing the configuration and
+        restarting the node.
+    </div>
+</div>
+
+@code {
+    private string _pattern = "";
+    private bool _busy;
+    private bool _loaded;
+    private bool _onlyCustomized;
+    private string? _error;
+
+    private IReadOnlyList<VariableRow> _all = [];
+    private List<VariableRow> _rows = [];
+    private int _customizedCount;
+
+    protected override async Task OnInitializedAsync() => await RefreshAsync();
+
+    private async Task OnPatternKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+            await RefreshAsync();
+    }
+
+    private async Task RefreshAsync()
+    {
+        if (_busy)
+            return;
+
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            _all = await Admin.LoadVariablesAsync(_pattern);
+            _customizedCount = _all.Count(v => v.IsCustomized);
+            BuildRows();
+            _loaded = true;
+        }
+        catch (Exception ex)
+        {
+            _error = ex is CamusDB.Client.CamusException camus
+                ? CamusSessionService.Describe(camus)
+                : ex.Message;
+            _loaded = true;
+        }
+        finally
+        {
+            _busy = false;
+            StateHasChanged();
+        }
+    }
+
+    private void OnOnlyCustomizedChanged(bool enabled)
+    {
+        _onlyCustomized = enabled;
+        BuildRows();
+    }
+
+    private void BuildRows() =>
+        _rows = (_onlyCustomized ? _all.Where(v => v.IsCustomized) : _all).ToList();
+
+    private static string ValueClass(VariableRow row)
+    {
+        if (row.Value is null)
+            return "cell-null";
+        if (row.IsMasked)
+            return "cell-masked";
+
+        return row.IsCustomized ? "var-value-set" : "";
+    }
+}

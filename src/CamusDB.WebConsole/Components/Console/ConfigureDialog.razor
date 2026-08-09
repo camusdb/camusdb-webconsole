@@ -70,6 +70,15 @@
             </MudTabs>
 
             <MudDivider Class="mt-1" />
+            <MudTextField @bind-Value="_backupEndpoint"
+                          Label="Backup endpoint (optional)"
+                          Variant="Variant.Outlined"
+                          Immediate="true"
+                          Disabled="Session.EndpointLocked"
+                          HelperText="@(Session.EndpointLocked
+                              ? "Locked by server configuration."
+                              : "Defaults to the endpoint above. Set it for a gRPC connection (the backup API is REST-only) or to pin a multi-node pool at the coordinator.")" />
+
             <MudNumericField @bind-Value="_timeoutSeconds"
                              Label="Timeout (seconds)"
                              Variant="Variant.Outlined"
@@ -111,6 +120,7 @@
     private string _user = "";
     private string _password = "";
     private string _accessToken = "";
+    private string _backupEndpoint = "";
     private int _authMode = UserPasswordTab;
     private bool _showPassword;
     private int _timeoutSeconds = 30;
@@ -125,6 +135,7 @@
         _protocol = Session.Protocol;
         _timeoutSeconds = Session.TimeoutSeconds;
         _maxRows = Session.MaxRows;
+        _backupEndpoint = Session.BackupEndpoint;
         _user = Session.User;
         _authMode = Session.UsesSuppliedToken ? AccessTokenTab : UserPasswordTab;
 
@@ -174,7 +185,8 @@
                 _maxRows,
                 user: useToken ? null : _user,
                 password: useToken ? null : _password,
-                accessToken: useToken ? _accessToken : null);
+                accessToken: useToken ? _accessToken : null,
+                backupEndpoint: _backupEndpoint);
 
             await Prefs.SetDatabaseAsync(Session.Database);
             await Prefs.SetUserAsync(Session.User);

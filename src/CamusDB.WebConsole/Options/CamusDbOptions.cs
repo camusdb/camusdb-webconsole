@@ -47,4 +47,20 @@ public sealed class CamusDbOptions
     /// default (10 minutes). When the server does report an expiry, that value wins.
     /// </summary>
     public int TokenLifetimeSeconds { get; set; }
+
+    /// <summary>
+    /// Where the backup administration API lives. Empty falls back to <see cref="Endpoint"/>, which is
+    /// what a REST deployment wants. Two cases need it set explicitly: <c>Protocol=grpc</c>, because
+    /// these endpoints are REST-only and the gRPC port cannot serve them, and a multi-node
+    /// <see cref="Endpoint"/> pool, because a coordinated backup must reach the coordinator and this
+    /// value is used verbatim with no round-robin.
+    /// </summary>
+    public string BackupEndpoint { get; set; } = "";
+
+    /// <summary>
+    /// Timeout in seconds for backup administration calls. 0 leaves the driver default (300s) — a full
+    /// backup copies a whole node's base image, so this is deliberately far longer than
+    /// <see cref="TimeoutSeconds"/>.
+    /// </summary>
+    public int BackupTimeoutSeconds { get; set; }
 }

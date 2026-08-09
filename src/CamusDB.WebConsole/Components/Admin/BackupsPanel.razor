@@ -1,0 +1,439 @@
+@using System.Globalization
+@using CamusDB.Client
+@inject BackupService Backups
+@inject CamusSessionService Session
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+
+<div class="admin-panel">
+    @if (Backups.UnavailableReason is string unavailable)
+    {
+        <MudAlert Severity="Severity.Info" Dense="true" Class="admin-alert">@unavailable</MudAlert>
+    }
+    else
+    {
+        <div class="admin-controls">
+            <MudButton Variant="Variant.Outlined"
+                       Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Refresh"
+                       Disabled="_busy"
+                       OnClick="RefreshAsync">
+                Refresh catalog
+            </MudButton>
+
+            <MudButton Variant="Variant.Filled"
+                       Color="Color.Primary"
+                       Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Backup"
+                       Disabled="_busy"
+                       OnClick="TakeFullAsync">
+                Take full backup
+            </MudButton>
+
+            <MudTooltip Text="One consistent cut across every partition. Must run on the coordinator node.">
+                <MudButton Variant="Variant.Outlined"
+                           Size="Size.Small"
+                           StartIcon="@Icons.Material.Filled.Hub"
+                           Disabled="_busy"
+                           OnClick="TakeCoordinatedAsync">
+                    Take coordinated backup
+                </MudButton>
+            </MudTooltip>
+
+            <MudTooltip Text="Report what retention would reclaim right now. Deletes nothing.">
+                <MudButton Variant="Variant.Outlined"
+                           Size="Size.Small"
+                           StartIcon="@Icons.Material.Filled.Calculate"
+                           Disabled="_busy"
+                           OnClick="PreviewGcAsync">
+                    Preview retention
+                </MudButton>
+            </MudTooltip>
+
+            <MudTooltip Text="@(_preview is null ? "Preview retention first" : "Delete what the preview reported")">
+                <MudButton Variant="Variant.Outlined"
+                           Color="Color.Error"
+                           Size="Size.Small"
+                           StartIcon="@Icons.Material.Filled.DeleteSweep"
+                           Disabled="_busy || _preview is null"
+                           OnClick="RunGcAsync">
+                    Run retention
+                </MudButton>
+            </MudTooltip>
+
+            @if (_busy)
+            {
+                <div class="admin-busy">
+                    <MudProgressCircular Size="Size.Small" Indeterminate="true" />
+                    <span>@(_busyMessage ?? "Working…")</span>
+                </div>
+            }
+        </div>
+
+        @if (_error is not null)
+        {
+            <MudAlert Severity="Severity.Error" Dense="true" Class="admin-alert">@_error</MudAlert>
+        }
+
+        @if (_notice is not null)
+        {
+            <MudAlert Severity="@_noticeSeverity" Dense="true" Class="admin-alert">@_notice</MudAlert>
+        }
+
+        @if (_preview is not null)
+        {
+            <div class="admin-gc">
+                <b>Retention preview</b> — would reclaim @FormatBytes(_preview.BytesReclaimed)
+                across @(_preview.RetentionDeletions?.Count ?? 0) chain deletion(s)
+                and @(_preview.OrphanReclamations?.Count ?? 0) orphan(s).
+                @if (_preview.RetentionDeletions is { Count: > 0 })
+                {
+                    <ul>
+                        @foreach (CamusBackupGcDeletion deletion in _preview.RetentionDeletions)
+                        {
+                            <li>
+                                @Short(deletion.BackupId) · @deletion.Type ·
+                                @deletion.CreatedAtUtc.ToString("yyyy-MM-dd HH:mm:ss") ·
+                                @FormatBytes(deletion.Bytes) · @deletion.Reason
+                            </li>
+                        }
+                    </ul>
+                }
+            </div>
+        }
+
+        <div class="results-toolbar">
+            <span>@_catalog.Count.ToString("N0") backup@(_catalog.Count == 1 ? "" : "s")</span>
+            @if (_invalidCount > 0)
+            {
+                <span class="admin-invalid-count">@_invalidCount unreadable manifest(s)</span>
+            }
+            <span class="results-table-badge">node-wide · @(Session.EffectiveBackupEndpoint ?? "")</span>
+        </div>
+
+        <div class="results-grid-wrap">
+            @if (!_loaded)
+            {
+                <div class="empty-state">Loading catalog…</div>
+            }
+            else if (_catalog.Count == 0)
+            {
+                <div class="empty-state">No backups in this node's catalog yet.</div>
+            }
+            else
+            {
+                <table class="results-table">
+                    <thead>
+                        <tr>
+                            <th>backup id</th>
+                            <th>type</th>
+                            <th>created (UTC)</th>
+                            <th>parent</th>
+                            <th>partitions</th>
+                            <th>cluster</th>
+                            <th class="results-actions-col">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (CamusBackupInfo backup in _catalog)
+                        {
+                            <tr class="@(backup.IsInvalid ? "backup-invalid" : null)">
+                                <td>
+                                    @Short(backup.BackupId)
+                                    @if (backup.IsInvalid)
+                                    {
+                                        <span class="col-type">unreadable: @backup.InvalidReason</span>
+                                    }
+                                </td>
+                                <td>
+                                    @backup.Type
+                                    @if (backup.WasSubstituted)
+                                    {
+                                        <span class="col-type">asked @backup.RequestedKind</span>
+                                    }
+                                </td>
+                                <td class="cell-timestamp">@backup.CreatedAtUtc.ToString("yyyy-MM-dd HH:mm:ss")</td>
+                                <td class="@(backup.ParentBackupId is null ? "cell-null" : null)">
+                                    @(backup.ParentBackupId is null ? "root" : Short(backup.ParentBackupId))
+                                </td>
+                                <td class="cell-number">@backup.PartitionCount</td>
+                                <td class="@(backup.ClusterId is null ? "cell-null" : null)">
+                                    @(backup.ClusterId is null ? "standalone" : Short(backup.ClusterId))
+                                </td>
+                                <td class="results-actions-col">
+                                    <div class="results-row-actions">
+                                        <MudTooltip Text="Resolve and validate the chain ending here — would this restore?">
+                                            <MudIconButton Icon="@Icons.Material.Filled.Link"
+                                                           Size="Size.Small"
+                                                           Disabled="_busy || backup.IsInvalid"
+                                                           OnClick="() => ShowChainAsync(backup)"
+                                                           aria-label="Validate chain" />
+                                        </MudTooltip>
+                                        <MudTooltip Text="Take an incremental backup chained onto this one">
+                                            <MudIconButton Icon="@Icons.Material.Filled.AddLink"
+                                                           Size="Size.Small"
+                                                           Disabled="_busy || backup.IsInvalid"
+                                                           OnClick="() => TakeIncrementalAsync(backup)"
+                                                           aria-label="Take incremental backup" />
+                                        </MudTooltip>
+                                    </div>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+        </div>
+
+        @if (_chain is not null)
+        {
+            <div class="admin-chain">
+                <div class="admin-chain-head">
+                    <b>Chain ending at @Short(_chainLeafId)</b>
+                    <span>@_chain.Count entry(ies), root first — assembled and validated by the server.</span>
+                    <MudIconButton Icon="@Icons.Material.Filled.Close"
+                                   Size="Size.Small"
+                                   OnClick="() => _chain = null"
+                                   aria-label="Close chain" />
+                </div>
+                <div class="admin-chain-window">
+                    @if (RecoverableFrom is DateTime from && RecoverableTo is DateTime to)
+                    {
+                        <text>
+                            Restorable window: @from.ToString("yyyy-MM-dd HH:mm:ss") →
+                            @to.ToString("yyyy-MM-dd HH:mm:ss") UTC
+                        </text>
+                    }
+                    else
+                    {
+                        <text>The server reported no restorable window for this chain.</text>
+                    }
+                </div>
+                <ol class="admin-chain-list">
+                    @foreach (CamusBackupInfo entry in _chain)
+                    {
+                        <li>
+                            @Short(entry.BackupId) · @entry.Type ·
+                            @entry.CreatedAtUtc.ToString("yyyy-MM-dd HH:mm:ss")
+                        </li>
+                    }
+                </ol>
+            </div>
+        }
+
+        <div class="admin-note">
+            A backup covers <b>every database on this node</b>, not the one selected in the console, and
+            takes a superuser when authentication is on. Restore is not offered here: it rebuilds into a
+            fresh data root and needs the server stopped and rebooted against it, so it stays an operator
+            runbook step. Validating a chain is the part a console can answer.
+        </div>
+    }
+</div>
+
+@code {
+    private List<CamusBackupInfo> _catalog = [];
+    private IReadOnlyList<CamusBackupInfo>? _chain;
+    private string _chainLeafId = "";
+    private CamusBackupGcResult? _preview;
+
+    private bool _loaded;
+    private bool _busy;
+    private string? _busyMessage;
+    private string? _error;
+    private string? _notice;
+    private Severity _noticeSeverity = Severity.Success;
+    private int _invalidCount;
+
+    private DateTime? RecoverableFrom => FromUnixMs(_chain?.FirstOrDefault()?.MinRecoverablePhysicalMs);
+
+    private DateTime? RecoverableTo => FromUnixMs(_chain?.FirstOrDefault()?.MaxRecoverablePhysicalMs);
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (Backups.UnavailableReason is null)
+            await RefreshAsync();
+    }
+
+    private async Task RefreshAsync() =>
+        await RunAsync("Reading catalog…", async () =>
+        {
+            IReadOnlyList<CamusBackupInfo> catalog = await Backups.ListAsync();
+
+            // Newest first: an operator reaching for this almost always wants the latest leaf.
+            _catalog = catalog.OrderByDescending(b => b.CreatedAtUtc).ToList();
+            _invalidCount = _catalog.Count(b => b.IsInvalid);
+            _loaded = true;
+        });
+
+    private async Task TakeFullAsync() =>
+        await RunAsync("Taking a full backup — this copies the node's base image…", async () =>
+        {
+            CamusBackupInfo backup = await Backups.TakeFullAsync();
+            Announce($"Full backup {Short(backup.BackupId)} taken.", Severity.Success);
+            await ReloadCatalogAsync();
+        });
+
+    private async Task TakeCoordinatedAsync() =>
+        await RunAsync("Taking a coordinated backup across every partition…", async () =>
+        {
+            CamusBackupInfo backup = await Backups.TakeCoordinatedAsync();
+            Announce($"Coordinated backup {Short(backup.BackupId)} taken.", Severity.Success);
+            await ReloadCatalogAsync();
+        });
+
+    private async Task TakeIncrementalAsync(CamusBackupInfo parent) =>
+        await RunAsync($"Taking an incremental backup onto {Short(parent.BackupId)}…", async () =>
+        {
+            CamusBackupInfo backup = await Backups.TakeIncrementalAsync(parent.BackupId);
+
+            // A parent past the retention floor is silently upgraded to a full backup. The call
+            // succeeded either way, but "you paid for a full image" belongs in an operator's log.
+            if (backup.WasSubstituted)
+            {
+                Announce(
+                    $"Requested an incremental, but the server took a {backup.ActualKind} instead "
+                    + $"({backup.SubstitutionReason}). Backup {Short(backup.BackupId)}.",
+                    Severity.Warning);
+            }
+            else
+            {
+                Announce($"Incremental backup {Short(backup.BackupId)} taken.", Severity.Success);
+            }
+
+            await ReloadCatalogAsync();
+        });
+
+    private async Task ShowChainAsync(CamusBackupInfo leaf) =>
+        await RunAsync("Resolving and validating the chain…", async () =>
+        {
+            _chain = await Backups.GetChainAsync(leaf.BackupId);
+            _chainLeafId = leaf.BackupId;
+            Announce($"Chain of {_chain.Count} entry(ies) resolved — this backup would restore.", Severity.Success);
+        });
+
+    private async Task PreviewGcAsync() =>
+        await RunAsync("Previewing retention…", async () =>
+        {
+            _preview = await Backups.PreviewGarbageCollectionAsync();
+            Announce(
+                $"Retention would reclaim {FormatBytes(_preview.BytesReclaimed)}. Nothing was deleted.",
+                Severity.Info);
+        });
+
+    private async Task RunGcAsync()
+    {
+        if (_preview is null)
+            return;
+
+        int chains = _preview.RetentionDeletions?.Count ?? 0;
+
+        var parameters = new DialogParameters<ConfirmDialog>
+        {
+            {
+                x => x.Message,
+                $"Delete {chains} backup chain(s) and reclaim {FormatBytes(_preview.BytesReclaimed)}? "
+                + "Only whole chains are deleted and a valid full root is kept for every retained leaf, "
+                + "but the deleted backups cannot be recovered."
+            },
+            { x => x.ConfirmText, "Run retention" },
+            { x => x.ConfirmColor, Color.Error },
+        };
+
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small, FullWidth = true };
+
+        IDialogReference dialog = await DialogService.ShowAsync<ConfirmDialog>("Run retention", parameters, options);
+        DialogResult? confirm = await dialog.Result;
+        if (confirm is null || confirm.Canceled)
+            return;
+
+        await RunAsync("Running retention…", async () =>
+        {
+            CamusBackupGcResult applied = await Backups.CollectGarbageAsync();
+            _preview = null;
+            Announce($"Retention reclaimed {FormatBytes(applied.BytesReclaimed)}.", Severity.Success);
+            await ReloadCatalogAsync();
+        });
+    }
+
+    /// <summary>Reloads inside an operation already holding the busy flag.</summary>
+    private async Task ReloadCatalogAsync()
+    {
+        IReadOnlyList<CamusBackupInfo> catalog = await Backups.ListAsync();
+        _catalog = catalog.OrderByDescending(b => b.CreatedAtUtc).ToList();
+        _invalidCount = _catalog.Count(b => b.IsInvalid);
+        _loaded = true;
+    }
+
+    private async Task RunAsync(string busyMessage, Func<Task> action)
+    {
+        if (_busy)
+            return;
+
+        _busy = true;
+        _busyMessage = busyMessage;
+        _error = null;
+        _notice = null;
+        StateHasChanged();
+
+        try
+        {
+            await action();
+        }
+        catch (CamusException ex)
+        {
+            _error = $"{ex.Code}: {CamusSessionService.Describe(ex)}";
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+            _busyMessage = null;
+            StateHasChanged();
+        }
+    }
+
+    private void Announce(string message, Severity severity)
+    {
+        _notice = message;
+        _noticeSeverity = severity;
+        Snackbar.Add(message, severity);
+    }
+
+    /// <summary>
+    /// A non-positive stamp means the server reported no window rather than a window that opened at
+    /// the Unix epoch — a fresh chain on a standalone node comes back as 0. Rendering that literally
+    /// would claim this backup restores to 1970.
+    /// </summary>
+    private static DateTime? FromUnixMs(long? milliseconds) =>
+        milliseconds is long ms && ms > 0 ? DateTimeOffset.FromUnixTimeMilliseconds(ms).UtcDateTime : null;
+
+    /// <summary>Backup ids are GUIDs; the first segment is enough to identify one on screen.</summary>
+    private static string Short(string? id)
+    {
+        if (string.IsNullOrEmpty(id))
+            return "";
+
+        int dash = id.IndexOf('-');
+        return dash > 0 ? id[..dash] : id;
+    }
+
+    private static string FormatBytes(long bytes)
+    {
+        string[] units = ["B", "KiB", "MiB", "GiB", "TiB"];
+        double value = bytes;
+        int unit = 0;
+
+        while (value >= 1024 && unit < units.Length - 1)
+        {
+            value /= 1024;
+            unit++;
+        }
+
+        return unit == 0
+            ? $"{bytes} B"
+            : $"{value.ToString("N1", CultureInfo.InvariantCulture)} {units[unit]}";
+    }
+}

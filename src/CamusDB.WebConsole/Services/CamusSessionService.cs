@@ -29,6 +29,40 @@ public sealed class CamusSessionService : IAsyncDisposable
     /// <summary>Credentials sent over plaintext where the server requires TLS.</summary>
     public const string TlsRequiredCode = "CADB0519";
 
+    /// <summary>The node has no <c>kahuna.backup_dir</c>, so the whole backup surface is unavailable.</summary>
+    public const string BackupNotConfiguredCode = "CADB0700";
+
+    /// <summary>A chain does not start at a full backup, or has a gap, broken link, or cycle.</summary>
+    public const string BackupChainInvalidCode = "CADB0701";
+
+    /// <summary>An incremental's parent aged past the retention floor; take a full backup instead.</summary>
+    public const string BackupNeedsFullBackupCode = "CADB0702";
+
+    /// <summary>The parent named by an incremental request does not exist.</summary>
+    public const string BackupParentMissingCode = "CADB0705";
+
+    /// <summary>An artifact is missing, truncated, duplicated, or fails its recorded digest.</summary>
+    public const string BackupCorruptArtifactCode = "CADB0706";
+
+    /// <summary>A coordinated backup reached a node that does not lead the backup meta partition.</summary>
+    public const string BackupNotCoordinatorCode = "CADB070E";
+
+    /// <summary>
+    /// Asks the server directly whether this session is a superuser. Returns true/false for the calling
+    /// session and SQL NULL when authentication is disabled — there is no verified identity to report,
+    /// and in that case the gated statements are open to any caller anyway. It needs no privilege, and
+    /// a FROM-less SELECT opens no table, so it is allowed to any authenticated caller.
+    /// </summary>
+    private const string SuperuserProbeSql = "SELECT is_superuser()";
+
+    /// <summary>
+    /// Fallback for a server too old to know <c>is_superuser()</c>. It infers the same bit the only way
+    /// available there: run something carrying the identical superuser gate and see whether it is
+    /// refused. A pattern matching nothing returns zero rows rather than raising, so a superuser pays
+    /// one empty result set and anyone else is refused with CADB0517.
+    /// </summary>
+    private const string AdminProbeFallbackSql = "SHOW VARIABLES LIKE 'camus_console_admin_probe_%'";
+
     private readonly object _gate = new();
     private CamusConnection? _connection;
     private CamusConnectionStringBuilder? _builder;
@@ -51,6 +85,9 @@ public sealed class CamusSessionService : IAsyncDisposable
         TokenLifetimeSeconds = o.TokenLifetimeSeconds;
         EndpointLocked = o.LockEndpoint;
 
+        BackupEndpoint = o.BackupEndpoint.Trim();
+        BackupTimeoutSeconds = o.BackupTimeoutSeconds;
+
         User = o.User.Trim();
         _password = string.IsNullOrEmpty(o.Password) ? null : o.Password;
         _accessToken = string.IsNullOrWhiteSpace(o.AccessToken) ? null : o.AccessToken.Trim();
@@ -67,6 +104,24 @@ public sealed class CamusSessionService : IAsyncDisposable
     public int MaxRows { get; private set; }
 
     public int TokenLifetimeSeconds { get; private set; }
+
+    /// <summary>
+    /// Explicit backup administration endpoint, or empty to let the driver fall back to
+    /// <see cref="Endpoint"/>. See <see cref="Options.CamusDbOptions.BackupEndpoint"/>.
+    /// </summary>
+    public string BackupEndpoint { get; private set; }
+
+    public int BackupTimeoutSeconds { get; private set; }
+
+    /// <summary>
+    /// The endpoint backup calls will actually reach. The backup API is REST-only, so a gRPC
+    /// connection has nowhere to send them unless <see cref="BackupEndpoint"/> is set — that case
+    /// reports null so the UI can say which key to set instead of surfacing a driver error per click.
+    /// </summary>
+    public string? EffectiveBackupEndpoint =>
+        !string.IsNullOrEmpty(BackupEndpoint) ? BackupEndpoint
+        : string.Equals(Protocol, "grpc", StringComparison.OrdinalIgnoreCase) ? null
+        : Endpoint;
 
     /// <summary>True when server configuration pins the endpoint and protocol — see <see cref="CamusDbOptions.LockEndpoint"/>.</summary>
     public bool EndpointLocked { get; }
@@ -95,6 +150,29 @@ public sealed class CamusSessionService : IAsyncDisposable
     /// reporting an error.
     /// </summary>
     public bool RequiresAuthentication { get; private set; }
+
+    /// <summary>
+    /// True when the probe run at connect time showed this session may run the administration
+    /// statements — a superuser, or any caller against a server with authentication disabled.
+    /// </summary>
+    public bool HasAdminAccess { get; private set; }
+
+    /// <summary>
+    /// True when the probe reached a verdict. It stays false when the probe failed for a reason that
+    /// says nothing about privilege (an older server that does not know SHOW VARIABLES, a transport
+    /// hiccup), so the console can offer the views anyway and let the statement report the problem.
+    /// </summary>
+    public bool AdminAccessProbed { get; private set; }
+
+    /// <summary>
+    /// Whether this session is a superuser, as the server reports it. Null means the question does not
+    /// apply — authentication is disabled, so there is no verified identity and the gated statements
+    /// are open to everyone — or that the probe reached no verdict.
+    /// </summary>
+    public bool? IsSuperuser { get; private set; }
+
+    /// <summary>True when the administration views are worth offering — see <see cref="AdminAccessProbed"/>.</summary>
+    public bool ShowAdministration => IsConnected && (HasAdminAccess || !AdminAccessProbed);
 
     public string? LastError => _lastError;
 
@@ -157,6 +235,8 @@ public sealed class CamusSessionService : IAsyncDisposable
 
             // Configured DB may not exist (ping still succeeds). Prefer a real database.
             await ResolveExistingDatabaseAsync(cancellationToken).ConfigureAwait(false);
+
+            await ProbeAdminAccessAsync(cancellationToken).ConfigureAwait(false);
         }
         catch (CamusException ex)
         {
@@ -195,6 +275,12 @@ public sealed class CamusSessionService : IAsyncDisposable
         if (TokenLifetimeSeconds > 0)
             connectionString += $";TokenLifetime={TokenLifetimeSeconds}";
 
+        if (!string.IsNullOrEmpty(BackupEndpoint))
+            connectionString += $";BackupEndpoint={BackupEndpoint}";
+
+        if (BackupTimeoutSeconds > 0)
+            connectionString += $";BackupTimeout={BackupTimeoutSeconds}";
+
         return connectionString;
     }
 
@@ -208,6 +294,11 @@ public sealed class CamusSessionService : IAsyncDisposable
         AuthFailedCode =>
             "Authentication failed. The server rejected the credentials, or has authentication enabled "
             + "and this session sent none — open Configure and sign in.",
+        // Two different refusals share this code. A table-grant miss is fixed with GRANT; a
+        // superuser-only surface is not, and offering GRANT there sends the operator down a dead end.
+        PrivilegeDeniedCode when ex.Message.Contains("superuser", StringComparison.OrdinalIgnoreCase) =>
+            $"Insufficient privilege: {Sentence(ex.Message)} No per-database grant covers this — it "
+            + "needs a superuser account.",
         PrivilegeDeniedCode =>
             $"Insufficient privilege: {ex.Message}. Every table a statement touches needs the privilege; "
             + "grant it with GRANT … ON database.table TO user.",
@@ -216,8 +307,35 @@ public sealed class CamusSessionService : IAsyncDisposable
         TlsRequiredCode =>
             "The server refuses credentials over a plaintext connection. Use an https:// endpoint, or "
             + "start the server with --require-tls-when-auth-enabled false when TLS terminates in front of it.",
+        BackupNotConfiguredCode =>
+            "Backups are not configured on this node. Set kahuna.backup_dir in the server's config.yml "
+            + "and restart it; until then the whole backup surface is unavailable.",
+        BackupChainInvalidCode =>
+            $"The backup chain could not be assembled: {ex.Message}. It does not start at a full backup, "
+            + "or has a gap, a broken parent link, or a cycle — this backup would not restore.",
+        BackupNeedsFullBackupCode =>
+            "That parent has aged past the retention floor, so a contiguous incremental is impossible. "
+            + "Take a full backup instead.",
+        BackupParentMissingCode =>
+            "The parent backup named by this request is no longer in the catalog.",
+        BackupCorruptArtifactCode =>
+            $"A backup artifact is missing, truncated, or fails its recorded digest: {ex.Message}.",
+        BackupNotCoordinatorCode =>
+            "A coordinated backup must be taken on the coordinator node. Point the backup endpoint at "
+            + "the current coordinator and retry.",
         _ => ex.Message,
     };
+
+    /// <summary>
+    /// Ends a server message with a period so console prose can continue after it. Server messages are
+    /// inconsistent about trailing punctuation, and the two run together without this.
+    /// </summary>
+    private static string Sentence(string message)
+    {
+        string trimmed = message.TrimEnd();
+
+        return trimmed.Length == 0 || trimmed[^1] is '.' or '!' or '?' or ':' ? trimmed : trimmed + ".";
+    }
 
     /// <summary>
     /// If the configured database is missing, switch to the first name from SHOW DATABASES.
@@ -254,6 +372,83 @@ public sealed class CamusSessionService : IAsyncDisposable
         Database = fallback;
     }
 
+    /// <summary>
+    /// Decides whether this session may reach the administration statements. Never throws: a session
+    /// that cannot run them is a normal state, not a failed connection.
+    /// </summary>
+    private async Task ProbeAdminAccessAsync(CancellationToken cancellationToken)
+    {
+        HasAdminAccess = false;
+        AdminAccessProbed = false;
+        IsSuperuser = null;
+
+        if (_connection is null)
+            return;
+
+        try
+        {
+            await using CamusCommand command = _connection.CreateCamusCommand(SuperuserProbeSql);
+            await using CamusDataReader reader =
+                await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+
+            if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false) && reader.FieldCount > 0)
+            {
+                object value = reader.GetValue(0);
+
+                // NULL means authentication is disabled, and then every caller may run these
+                // statements — so "no identity" is access, not the absence of it.
+                IsSuperuser = value is DBNull ? null : Convert.ToBoolean(value);
+                HasAdminAccess = IsSuperuser ?? true;
+                AdminAccessProbed = true;
+                return;
+            }
+        }
+        catch (CamusException ex) when (ex.Code == PrivilegeDeniedCode)
+        {
+            // Not expected — the function needs no privilege — but a refusal is still a definitive no.
+            AdminAccessProbed = true;
+            IsSuperuser = false;
+            return;
+        }
+        catch
+        {
+            // Most likely a server that predates is_superuser(); fall through and infer it instead.
+        }
+
+        await ProbeAdminAccessLegacyAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task ProbeAdminAccessLegacyAsync(CancellationToken cancellationToken)
+    {
+        if (_connection is null)
+            return;
+
+        try
+        {
+            await using CamusCommand command = _connection.CreateCamusCommand(AdminProbeFallbackSql);
+            await using CamusDataReader reader =
+                await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                // The pattern matches nothing by construction; draining is just protocol hygiene.
+            }
+
+            HasAdminAccess = true;
+            AdminAccessProbed = true;
+        }
+        catch (CamusException ex) when (ex.Code == PrivilegeDeniedCode)
+        {
+            // A definitive "not a superuser".
+            AdminAccessProbed = true;
+            IsSuperuser = false;
+        }
+        catch
+        {
+            // Says nothing about privilege — leave the verdict open.
+        }
+    }
+
     public async Task ConfigureAndConnectAsync(
         string endpoint,
         string database,
@@ -263,6 +458,7 @@ public sealed class CamusSessionService : IAsyncDisposable
         string? user = null,
         string? password = null,
         string? accessToken = null,
+        string? backupEndpoint = null,
         CancellationToken cancellationToken = default)
     {
         string? token = string.IsNullOrWhiteSpace(accessToken) ? null : accessToken.Trim();
@@ -287,14 +483,32 @@ public sealed class CamusSessionService : IAsyncDisposable
         if (newDatabase.Contains(';', StringComparison.Ordinal))
             throw new ArgumentException("A database name cannot contain ';'.", nameof(database));
 
+        // The backup endpoint is a second URL the server opens on the visitor's behalf, so it gets the
+        // same shape check and the same deployment lock as the main endpoint.
+        string newBackupEndpoint = (backupEndpoint ?? "").Trim();
+        if (newBackupEndpoint.Length > 0)
+        {
+            if (!Uri.TryCreate(newBackupEndpoint, UriKind.Absolute, out Uri? backupUri)
+                || (backupUri.Scheme != Uri.UriSchemeHttp && backupUri.Scheme != Uri.UriSchemeHttps))
+            {
+                throw new ArgumentException(
+                    "The backup endpoint must be an absolute http:// or https:// URL.", nameof(backupEndpoint));
+            }
+
+            if (newBackupEndpoint.Contains(';', StringComparison.Ordinal))
+                throw new ArgumentException("A backup endpoint cannot contain ';'.", nameof(backupEndpoint));
+        }
+
         if (EndpointLocked
             && (!string.Equals(newEndpoint, Endpoint, StringComparison.Ordinal)
-                || !string.Equals(newProtocol, Protocol, StringComparison.Ordinal)))
+                || !string.Equals(newProtocol, Protocol, StringComparison.Ordinal)
+                || !string.Equals(newBackupEndpoint, BackupEndpoint, StringComparison.Ordinal)))
         {
             throw new InvalidOperationException(
                 "The endpoint is locked by server configuration (CamusDB:LockEndpoint) and cannot be changed.");
         }
 
+        BackupEndpoint = newBackupEndpoint;
         Endpoint = newEndpoint;
         Database = newDatabase;
         Protocol = newProtocol;
@@ -417,6 +631,11 @@ public sealed class CamusSessionService : IAsyncDisposable
             }
 
             _connected = false;
+
+            // The verdict belongs to the connection that was probed, not to the console.
+            HasAdminAccess = false;
+            AdminAccessProbed = false;
+            IsSuperuser = null;
         }
 
         NotifyChanged();

@@ -1,0 +1,111 @@
+@page "/admin"
+@inject CamusSessionService Session
+@inject NavigationManager Navigation
+@implements IDisposable
+
+<PageTitle>Administration · CamusDB Web Console</PageTitle>
+
+<div class="console-main admin-page">
+    <div class="admin-header">
+        <MudTooltip Text="Back to the query console">
+            <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
+                           Size="Size.Small"
+                           OnClick="@(() => Navigation.NavigateTo("/"))"
+                           aria-label="Back to the query console" />
+        </MudTooltip>
+        <h1 class="admin-title">Administration</h1>
+        <span class="admin-subtitle">
+            @Session.Endpoint answers for itself — these statements are node-local and never forward to
+            the leader.
+        </span>
+    </div>
+
+    @if (!Session.IsConnected)
+    {
+        <div class="empty-state">
+            Not connected. Open Configure from the query console and connect first.
+        </div>
+    }
+    else if (Session.AdminAccessProbed && !Session.HasAdminAccess)
+    {
+        <div class="admin-denied">
+            <MudAlert Severity="Severity.Warning" Dense="true">
+                <MudText Typo="Typo.body2">
+                    <b>@(string.IsNullOrEmpty(Session.User) ? "This session" : Session.User)</b> is not a
+                    superuser, and every surface here requires one when the server has authentication
+                    enabled. Engine metrics describe Raft topology and whole-node workload, the variable
+                    list describes the node's whole security posture, and a backup covers every database
+                    on the node — none of it is scoped down by a per-database grant, so there is no
+                    privilege to ask for short of a superuser account.
+                </MudText>
+            </MudAlert>
+        </div>
+    }
+    else
+    {
+        <div class="admin-tabbar" role="tablist">
+            @foreach (AdminTab tab in Tabs)
+            {
+                <button type="button"
+                        role="tab"
+                        class="admin-tab @(_tab == tab ? "active" : null)"
+                        aria-selected="@(_tab == tab ? "true" : "false")"
+                        @onclick="() => SelectTab(tab)">
+                    @Title(tab)
+                </button>
+            }
+        </div>
+
+        @* Both panels stay mounted: switching tabs must not throw away the engine-stats baseline. *@
+        <div class="admin-pane @(_tab == AdminTab.EngineStats ? null : "admin-pane-hidden")">
+            <EngineStatsPanel />
+        </div>
+        <div class="admin-pane @(_tab == AdminTab.Variables ? null : "admin-pane-hidden")">
+            <VariablesPanel />
+        </div>
+        @* Mounted lazily: listing the catalog is a real HTTP call, and it must not fire for someone
+           who never opens the tab. *@
+        @if (_backupsOpened)
+        {
+            <div class="admin-pane @(_tab == AdminTab.Backups ? null : "admin-pane-hidden")">
+                <BackupsPanel />
+            </div>
+        }
+    }
+</div>
+
+@code {
+    private enum AdminTab
+    {
+        EngineStats,
+        Variables,
+        Backups,
+    }
+
+    private static readonly AdminTab[] Tabs = [AdminTab.EngineStats, AdminTab.Variables, AdminTab.Backups];
+
+    private AdminTab _tab = AdminTab.EngineStats;
+    private bool _backupsOpened;
+
+    protected override void OnInitialized() => Session.Changed += OnSessionChanged;
+
+    private void OnSessionChanged() => InvokeAsync(StateHasChanged);
+
+    private void SelectTab(AdminTab tab)
+    {
+        _tab = tab;
+
+        if (tab == AdminTab.Backups)
+            _backupsOpened = true;
+    }
+
+    private static string Title(AdminTab tab) => tab switch
+    {
+        AdminTab.EngineStats => "Engine stats",
+        AdminTab.Variables => "Variables",
+        AdminTab.Backups => "Backups",
+        _ => tab.ToString(),
+    };
+
+    public void Dispose() => Session.Changed -= OnSessionChanged;
+}

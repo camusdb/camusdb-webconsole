@@ -18,6 +18,8 @@ builder.Services.AddScoped<ConsolePreferencesService>();
 builder.Services.AddScoped<SchemaExplorerService>();
 builder.Services.AddScoped<QueryExecutionService>();
 builder.Services.AddScoped<ExportService>();
+builder.Services.AddScoped<AdminService>();
+builder.Services.AddScoped<BackupService>();
 
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();

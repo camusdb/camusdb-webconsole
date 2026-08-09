@@ -1,0 +1,342 @@
+@using System.Globalization
+@inject AdminService Admin
+@implements IAsyncDisposable
+
+<div class="admin-panel">
+    <div class="admin-controls">
+        <MudTextField @bind-Value="_pattern"
+                      Label="LIKE pattern"
+                      Placeholder="raft.executor%"
+                      Variant="Variant.Outlined"
+                      Margin="Margin.Dense"
+                      Immediate="true"
+                      Clearable="true"
+                      Class="admin-pattern-field"
+                      HelperText="@AdminService.PatternHelp"
+                      OnKeyDown="OnPatternKeyDown" />
+
+        <MudButton Variant="Variant.Filled"
+                   Color="Color.Primary"
+                   Size="Size.Small"
+                   StartIcon="@Icons.Material.Filled.Refresh"
+                   Disabled="_busy"
+                   OnClick="() => RefreshAsync()">
+            @(_busy ? "Reading…" : "Take reading")
+        </MudButton>
+
+        <MudSwitch T="bool"
+                   Value="_autoRefresh"
+                   ValueChanged="OnAutoRefreshChanged"
+                   Color="Color.Primary"
+                   Label="@($"Auto every {AutoRefreshSeconds}s")" />
+
+        <MudSwitch T="bool"
+                   Value="_onlyMoved"
+                   ValueChanged="OnOnlyMovedChanged"
+                   Color="Color.Primary"
+                   Label="Only rows that moved" />
+
+        <MudTooltip Text="Forget the previous reading, so the next one has nothing to subtract from.">
+            <MudButton Variant="Variant.Outlined"
+                       Size="Size.Small"
+                       Disabled="_previous is null"
+                       OnClick="ResetBaseline">
+                Reset baseline
+            </MudButton>
+        </MudTooltip>
+    </div>
+
+    @if (_error is not null)
+    {
+        <MudAlert Severity="Severity.Error" Dense="true" Class="admin-alert">@_error</MudAlert>
+    }
+
+    <div class="results-toolbar">
+        @if (_current is null)
+        {
+            <span>No reading yet.</span>
+        }
+        else
+        {
+            <span>@_rows.Count.ToString("N0") metric@(_rows.Count == 1 ? "" : "s")</span>
+            @if (_onlyMoved && _current.Rows.Count != _rows.Count)
+            {
+                <span>of @_current.Rows.Count.ToString("N0")</span>
+            }
+            <span>
+                @if (_previous is null)
+                {
+                    <text>first reading — deltas appear on the next one</text>
+                }
+                else
+                {
+                    <text>Δ over @FormatSeconds(_window)</text>
+                }
+            </span>
+            <span class="results-table-badge">@NodeLabel</span>
+        }
+    </div>
+
+    <div class="results-grid-wrap">
+        @if (_current is null)
+        {
+            <div class="empty-state">Take a reading to see the engine's counters, histograms, and gauges.</div>
+        }
+        else if (_current.Rows.Count == 0)
+        {
+            <div class="empty-state">
+                No metrics returned.
+                @if (string.IsNullOrWhiteSpace(_pattern))
+                {
+                    <text>
+                        This node may have collection turned off (<code>engine_metrics_enabled: false</code>),
+                        which returns zero rows rather than an error.
+                    </text>
+                }
+                else
+                {
+                    <text>Nothing matched the pattern. Matching is case-sensitive and metric names are lowercase.</text>
+                }
+            </div>
+        }
+        else if (_rows.Count == 0)
+        {
+            <div class="empty-state">Nothing moved between the two readings.</div>
+        }
+        else
+        {
+            <table class="results-table">
+                <thead>
+                    <tr>
+                        <th>metric<span class="col-type">source</span></th>
+                        <th>tags</th>
+                        <th>kind</th>
+                        <th>count<span class="col-type">cumulative</span></th>
+                        <th>Δ count</th>
+                        <th>per sec</th>
+                        <th>total<span class="col-type">cumulative</span></th>
+                        <th>Δ total</th>
+                        <th>min</th>
+                        <th>max</th>
+                        <th>last</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <Virtualize Items="_rows" Context="row" ItemSize="34">
+                        <tr>
+                            <td>
+                                @row.Current.Metric
+                                <span class="col-type">@row.Current.Source</span>
+                            </td>
+                            <td class="@(row.Current.Tags.Length == 0 ? "cell-null" : null)">
+                                @(row.Current.Tags.Length == 0 ? "—" : row.Current.Tags)
+                            </td>
+                            <td>@row.Current.Kind</td>
+                            <td class="cell-number">@FormatCount(row.Current.Count)</td>
+                            <td class="@DeltaClass(row.CountDelta)">@FormatDelta(row.CountDelta)</td>
+                            <td class="@DeltaClass(row.CountPerSecond)">@FormatRate(row.CountPerSecond)</td>
+                            <td class="cell-number">@FormatNumber(row.Current.Total)</td>
+                            <td class="@DeltaClass(row.TotalDelta)">@FormatDelta(row.TotalDelta)</td>
+                            <td class="cell-number">@FormatNumber(row.Current.Min)</td>
+                            <td class="@(row.MaxGrew ? "cell-number cell-max-grew" : "cell-number")">
+                                @FormatNumber(row.Current.Max)
+                            </td>
+                            <td class="cell-number">@FormatNumber(row.Current.Last)</td>
+                        </tr>
+                    </Virtualize>
+                </tbody>
+            </table>
+        }
+    </div>
+</div>
+
+@code {
+    private const int AutoRefreshSeconds = 10;
+
+    private string _pattern = "";
+    private bool _busy;
+    private bool _onlyMoved;
+    private bool _autoRefresh;
+    private string? _error;
+
+    private EngineStatsSnapshot? _current;
+    private EngineStatsSnapshot? _previous;
+    private TimeSpan _window;
+    private List<EngineStatDelta> _rows = [];
+
+    private PeriodicTimer? _timer;
+    private CancellationTokenSource? _autoCts;
+
+    private string NodeLabel =>
+        _current?.Rows.Select(r => r.Node).FirstOrDefault(n => n.Length > 0) ?? "this node";
+
+    protected override async Task OnInitializedAsync() => await RefreshAsync();
+
+    private async Task OnPatternKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+            await RefreshAsync();
+    }
+
+    /// <summary>
+    /// Takes a reading and keeps the one before it. Counters and histograms are cumulative since
+    /// process start with no reset, so every number worth acting on is a difference between two
+    /// readings rather than either reading on its own.
+    /// </summary>
+    private async Task RefreshAsync()
+    {
+        if (_busy)
+            return;
+
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            EngineStatsSnapshot snapshot = await Admin.LoadEngineStatsAsync(_pattern);
+
+            _previous = _current;
+            _current = snapshot;
+            _window = _previous is null ? TimeSpan.Zero : snapshot.TakenAtUtc - _previous.TakenAtUtc;
+
+            BuildRows();
+        }
+        catch (Exception ex)
+        {
+            _error = Describe(ex);
+        }
+        finally
+        {
+            _busy = false;
+            StateHasChanged();
+        }
+    }
+
+    private void BuildRows()
+    {
+        if (_current is null)
+        {
+            _rows = [];
+            return;
+        }
+
+        Dictionary<string, EngineStatRow> baseline = _previous is null
+            ? []
+            : _previous.Rows.GroupBy(r => r.Key).ToDictionary(g => g.Key, g => g.First());
+
+        IEnumerable<EngineStatDelta> deltas = _current.Rows.Select(row => new EngineStatDelta
+        {
+            Current = row,
+            Previous = baseline.GetValueOrDefault(row.Key),
+            Elapsed = _window,
+        });
+
+        if (_onlyMoved && _previous is not null)
+            deltas = deltas.Where(d => d.Moved);
+
+        _rows = deltas.ToList();
+    }
+
+    private void OnOnlyMovedChanged(bool enabled)
+    {
+        _onlyMoved = enabled;
+        BuildRows();
+    }
+
+    private void ResetBaseline()
+    {
+        _previous = null;
+        _window = TimeSpan.Zero;
+        BuildRows();
+    }
+
+    private async Task OnAutoRefreshChanged(bool enabled)
+    {
+        _autoRefresh = enabled;
+
+        await StopAutoRefreshAsync();
+
+        if (!enabled)
+            return;
+
+        _autoCts = new CancellationTokenSource();
+        _timer = new PeriodicTimer(TimeSpan.FromSeconds(AutoRefreshSeconds));
+        _ = RunAutoRefreshAsync(_timer, _autoCts.Token);
+    }
+
+    private async Task RunAutoRefreshAsync(PeriodicTimer timer, CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (await timer.WaitForNextTickAsync(cancellationToken))
+                await InvokeAsync(RefreshAsync);
+        }
+        catch (OperationCanceledException)
+        {
+            // Toggled off, or the circuit is going away.
+        }
+    }
+
+    private async Task StopAutoRefreshAsync()
+    {
+        if (_autoCts is not null)
+        {
+            await _autoCts.CancelAsync();
+            _autoCts.Dispose();
+            _autoCts = null;
+        }
+
+        _timer?.Dispose();
+        _timer = null;
+    }
+
+    public async ValueTask DisposeAsync() => await StopAutoRefreshAsync();
+
+    private static string Describe(Exception ex) =>
+        ex is CamusDB.Client.CamusException camus ? CamusSessionService.Describe(camus) : ex.Message;
+
+    private static string FormatSeconds(TimeSpan span) =>
+        span.TotalSeconds.ToString("N1", CultureInfo.InvariantCulture) + " s";
+
+    private static string FormatCount(double? value) =>
+        value is double v ? v.ToString("N0", CultureInfo.InvariantCulture) : "—";
+
+    private static string FormatNumber(double? value)
+    {
+        if (value is not double v)
+            return "—";
+
+        return Math.Abs(v) >= 1000
+            ? v.ToString("N2", CultureInfo.InvariantCulture)
+            : v.ToString("0.####", CultureInfo.InvariantCulture);
+    }
+
+    private static string FormatDelta(double? value)
+    {
+        if (value is not double v)
+            return "—";
+        if (v == 0)
+            return "0";
+
+        string formatted = FormatNumber(Math.Abs(v));
+        return v > 0 ? $"+{formatted}" : $"-{formatted}";
+    }
+
+    private static string FormatRate(double? value)
+    {
+        if (value is not double v)
+            return "—";
+        if (v == 0)
+            return "0";
+
+        return v.ToString(Math.Abs(v) >= 100 ? "N0" : "0.##", CultureInfo.InvariantCulture);
+    }
+
+    private static string DeltaClass(double? value) =>
+        value switch
+        {
+            null => "cell-null",
+            0 => "cell-number",
+            _ => "cell-number cell-delta",
+        };
+}

@@ -2,6 +2,7 @@
 @inject CamusSessionService Session
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
+@inject NavigationManager Navigation
 @implements IDisposable
 
 <MudThemeProvider Theme="_theme" IsDarkMode="true" />
@@ -36,6 +37,18 @@
                          CloseIcon="@Icons.Material.Filled.Logout">
                     @(Session.UsesSuppliedToken ? "token" : Session.User)
                 </MudChip>
+            </MudTooltip>
+        }
+        @if (Session.ShowAdministration)
+        {
+            <MudTooltip Text="Engine stats and variables for the node this console is pointed at">
+                <MudButton Variant="Variant.Outlined"
+                           Size="Size.Small"
+                           Class="admin-btn"
+                           StartIcon="@Icons.Material.Filled.MonitorHeart"
+                           OnClick="@(() => Navigation.NavigateTo("/admin"))">
+                    Administration
+                </MudButton>
             </MudTooltip>
         }
         <MudButton Variant="Variant.Filled"
