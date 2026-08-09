@@ -35,6 +35,14 @@ public sealed class CamusDbOptions
     public string AccessToken { get; set; } = "";
 
     /// <summary>
+    /// When true, the Configure dialog cannot repoint the console at a different server: endpoint and
+    /// protocol stay fixed to the configured values. Enable this (CamusDB__LockEndpoint=true) whenever
+    /// the console is reachable beyond localhost, so a visitor cannot use the server as a proxy to
+    /// probe internal hosts it can reach but they cannot.
+    /// </summary>
+    public bool LockEndpoint { get; set; }
+
+    /// <summary>
     /// Fallback seconds to reuse a minted token when the server reports no expiry. 0 leaves the driver
     /// default (10 minutes). When the server does report an expiry, that value wins.
     /// </summary>

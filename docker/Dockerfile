@@ -32,4 +32,8 @@ COPY --from=build-env /app .
 ENV ASPNETCORE_URLS=http://+:8080
 ENV ASPNETCORE_ENVIRONMENT=Production
 
+# 8080 is unprivileged, so the app does not need root. The aspnet image ships a
+# non-root user for exactly this ($APP_UID = the `app` user).
+USER $APP_UID
+
 ENTRYPOINT ["dotnet", "CamusDB.WebConsole.dll"]

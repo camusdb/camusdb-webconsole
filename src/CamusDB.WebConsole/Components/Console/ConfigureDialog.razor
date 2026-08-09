@@ -12,12 +12,13 @@
                           Label="Endpoint"
                           Variant="Variant.Outlined"
                           Immediate="true"
-                          HelperText="e.g. http://localhost:5095 (REST) or http://localhost:5096 (gRPC)" />
+                          Disabled="Session.EndpointLocked"
+                          HelperText="@(Session.EndpointLocked ? "Locked by server configuration." : "e.g. http://localhost:5095 (REST) or http://localhost:5096 (gRPC)")" />
             <MudTextField @bind-Value="_database"
                           Label="Database"
                           Variant="Variant.Outlined"
                           Immediate="true" />
-            <MudSelect T="string" @bind-Value="_protocol" Label="Protocol" Variant="Variant.Outlined">
+            <MudSelect T="string" @bind-Value="_protocol" Label="Protocol" Variant="Variant.Outlined" Disabled="Session.EndpointLocked">
                 <MudSelectItem Value="@("rest")">REST</MudSelectItem>
                 <MudSelectItem Value="@("grpc")">gRPC</MudSelectItem>
             </MudSelect>

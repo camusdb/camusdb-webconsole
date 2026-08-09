@@ -49,6 +49,7 @@ public sealed class CamusSessionService : IAsyncDisposable
         TimeoutSeconds = o.TimeoutSeconds > 0 ? o.TimeoutSeconds : 30;
         MaxRows = o.MaxRows > 0 ? o.MaxRows : 1000;
         TokenLifetimeSeconds = o.TokenLifetimeSeconds;
+        EndpointLocked = o.LockEndpoint;
 
         User = o.User.Trim();
         _password = string.IsNullOrEmpty(o.Password) ? null : o.Password;
@@ -66,6 +67,9 @@ public sealed class CamusSessionService : IAsyncDisposable
     public int MaxRows { get; private set; }
 
     public int TokenLifetimeSeconds { get; private set; }
+
+    /// <summary>True when server configuration pins the endpoint and protocol — see <see cref="CamusDbOptions.LockEndpoint"/>.</summary>
+    public bool EndpointLocked { get; }
 
     /// <summary>User the console authenticates as, or empty when connecting unauthenticated.</summary>
     public string User { get; private set; }
@@ -104,7 +108,7 @@ public sealed class CamusSessionService : IAsyncDisposable
     /// </summary>
     public void PreferDatabase(string database)
     {
-        if (IsConnected || string.IsNullOrWhiteSpace(database))
+        if (IsConnected || string.IsNullOrWhiteSpace(database) || database.Contains(';', StringComparison.Ordinal))
             return;
 
         Database = database.Trim();
@@ -265,9 +269,35 @@ public sealed class CamusSessionService : IAsyncDisposable
         if (token is not null && token.Contains(';', StringComparison.Ordinal))
             throw new ArgumentException("An access token cannot contain ';'.", nameof(accessToken));
 
-        Endpoint = endpoint.Trim();
-        Database = database.Trim();
-        Protocol = string.IsNullOrWhiteSpace(protocol) ? "rest" : protocol.Trim();
+        string newEndpoint = endpoint.Trim();
+        string newProtocol = string.IsNullOrWhiteSpace(protocol) ? "rest" : protocol.Trim();
+        string newDatabase = database.Trim();
+
+        // The endpoint reaches the driver via a ';'-separated connection string, and the server —
+        // not the visitor's browser — opens it. Validate the shape, and honour the deployment lock.
+        if (!Uri.TryCreate(newEndpoint, UriKind.Absolute, out Uri? uri)
+            || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+        {
+            throw new ArgumentException("Endpoint must be an absolute http:// or https:// URL.", nameof(endpoint));
+        }
+
+        if (newEndpoint.Contains(';', StringComparison.Ordinal))
+            throw new ArgumentException("Endpoint cannot contain ';'.", nameof(endpoint));
+
+        if (newDatabase.Contains(';', StringComparison.Ordinal))
+            throw new ArgumentException("A database name cannot contain ';'.", nameof(database));
+
+        if (EndpointLocked
+            && (!string.Equals(newEndpoint, Endpoint, StringComparison.Ordinal)
+                || !string.Equals(newProtocol, Protocol, StringComparison.Ordinal)))
+        {
+            throw new InvalidOperationException(
+                "The endpoint is locked by server configuration (CamusDB:LockEndpoint) and cannot be changed.");
+        }
+
+        Endpoint = newEndpoint;
+        Database = newDatabase;
+        Protocol = newProtocol;
         TimeoutSeconds = timeoutSeconds > 0 ? timeoutSeconds : 30;
         MaxRows = maxRows > 0 ? maxRows : 1000;
 
@@ -321,6 +351,8 @@ public sealed class CamusSessionService : IAsyncDisposable
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(databaseName);
         string trimmed = databaseName.Trim();
+        if (trimmed.Contains(';', StringComparison.Ordinal))
+            throw new ArgumentException("A database name cannot contain ';'.", nameof(databaseName));
 
         if (!IsConnected)
         {
