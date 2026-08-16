@@ -133,6 +133,142 @@ TLS terminates in front of it.
 | `CADB0518` | Too many login attempts for that account |
 | `CADB0519` | Credentials sent over plaintext where the server requires TLS |
 
+## Embedding the console (vendor launch)
+
+An external product can rename the console and drop a user straight into an authenticated session,
+without that user ever seeing the CamusDB access token. The whole surface is **off by default**.
+
+```json
+"ConsoleLaunch": {
+  "Enabled": true,
+  "ApiKey": "",
+  "RequireHttps": true,
+  "CodeLifetimeSeconds": 60,
+  "SessionLifetimeMinutes": 60,
+  "DefaultBrandName": "CamusDB Web Console",
+  "AllowedEndpoints": [],
+  "PublicBaseUrl": ""
+}
+```
+
+Supply the key from the environment — `ConsoleLaunch__ApiKey` — never from `appsettings.json`. It
+must be at least 32 characters and the app **refuses to start** without it once `Enabled` is true.
+Generate one with `openssl rand -base64 32`.
+
+### The handoff, in two legs
+
+The split is the point: the token travels only vendor-backend → console-backend. The user's browser
+never carries it.
+
+**Leg 1 — your backend asks for a launch link.** Nothing here touches the browser.
+
+```bash
+curl -X POST https://console.example.com/api/console/sessions \
+  -H "X-Console-Key: $CONSOLE_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "brandName":   "Acme Data Console",
+        "accessToken": "<a CamusDB token you already minted>",
+        "database":    "analytics"
+      }'
+
+{"launchUrl":"https://console.example.com/console/launch?code=rwt2Ukzz…","expiresInSeconds":60}
+```
+
+Every field except `brandName` is optional. `endpoint` and `protocol` are also accepted — see the
+warning below.
+
+**Leg 2 — redirect the user to `launchUrl`.** The console spends the code, sets an HttpOnly,
+Secure, SameSite=Lax `__Host-` cookie holding an opaque session id, and redirects to `/`. The code
+is single use and dies after `CodeLifetimeSeconds`; a replayed or expired link gets a plain
+"this link has expired" page.
+
+### What the user can and cannot see
+
+The access token is held only in server memory, indexed by the session id. It is never placed in a
+URL, in the page HTML, in `localStorage`, or in anything reachable from JavaScript, and the Configure
+dialog never reads it back — the app bar shows only a `token` chip. The session cookie is `HttpOnly`,
+so script cannot read it either.
+
+The console's own render pipeline cannot read that cookie (only the static render can, and the
+interactive circuit runs later in a different scope), so the static render mints a **single-use
+handoff**, valid 30 seconds, and passes it to the circuit — which spends it immediately for the
+ticket. Component parameters for `InteractiveServer` are encrypted with ASP.NET Core Data Protection,
+so even that handoff is opaque in the page.
+
+### Naming rules
+
+`brandName` is normalised (NFC, whitespace collapsed, trimmed) and then checked against an
+**allowlist**: Unicode letters, digits, spaces, and `-_.,&'()+`, up to 64 characters, with at least
+one letter or digit. Everything else is rejected with a message naming the offending character —
+`<`, `>`, `"`, `\`, `/`, `{`, `}`, `;`, backtick, control characters, Unicode format characters
+(zero-width joiners, bidi overrides), and non-BMP characters such as emoji.
+
+Blazor HTML-encodes the name at every render point, so the allowlist is defence in depth rather
+than the only thing standing between a vendor and stored XSS. Keep it that way: **never** wrap the
+name in a `MarkupString`, and never interpolate it into a `Style`/`class` attribute or into
+JavaScript. It is validated again on the way into `ConsoleBranding`, so no future path can set a
+name that skipped the gate.
+
+### ⚠️ `endpoint` in a payload is a request-forgery surface
+
+A launch payload may repoint the session at another CamusDB server. **The console's own process
+opens that URL**, so a payload can reach hosts the visitor cannot — cloud metadata services,
+internal admin ports. Two controls exist and you should set one:
+
+- `CamusDB:LockEndpoint=true` — refuses any override outright; a payload naming a different
+  endpoint is rejected with 400.
+- `ConsoleLaunch:AllowedEndpoints` — the host allowlist, below.
+
+With neither set, any `http(s)` URL is accepted and the app logs a warning at startup.
+
+#### The host allowlist
+
+The whole list fits in one environment variable, comma-separated:
+
+```bash
+ConsoleLaunch__AllowedEndpoints="https://db.acme.example,https://replica.acme.example"
+```
+
+Semicolons and whitespace work as separators too, and the indexed form
+(`ConsoleLaunch__AllowedEndpoints__0=…`, `__1=…`) is still accepted — useful when a value itself
+contains a comma. In `appsettings.json` it is an ordinary array.
+
+Entries take either form:
+
+| Entry | Matches |
+| --- | --- |
+| `https://db.acme.example` | that scheme, host and port only (port defaults to 443 here) |
+| `db.acme.example` | that host on **any** scheme and **any** port |
+| `db.acme.example:5095` | that host on port 5095, any scheme |
+
+Matching is on the parsed scheme, host and port — never the raw string — so a path suffix, a
+trailing slash, or a query cannot smuggle one origin past another, and
+`https://db.acme.example.evil.com` does not pass as `https://db.acme.example`. There is **no
+wildcard form**: `*.acme.example` is rejected, deliberately.
+
+An entry that is neither a URL nor a `host[:port]` **fails startup**, naming the entry — a
+silently-skipped entry would leave a list that looks configured and is not. On a good list the
+console logs what it understood:
+
+```
+Console launch endpoint allowlist (2 entries): https://db.acme.example:443, http(s)://internal.example:5095
+```
+
+### Operational notes
+
+- **Single instance.** Tickets live in process memory. A multi-instance deployment needs sticky
+  sessions, or a shared store — a code minted on one node cannot be redeemed on another.
+- `MaxLiveEntries` (default 2000) caps live codes plus sessions plus handoffs. At the ceiling the
+  endpoint fails closed with 503 rather than growing unbounded state that holds access tokens.
+- `RequireHttps` refuses to mint over plaintext, because the API key rides in a request header. Only
+  set it false when TLS terminates in front and forwarded headers are not wired up.
+- When `Enabled` is false, both paths answer exactly as any other unmatched URL — a probe cannot
+  tell a disabled console from one that never had the feature.
+- Signing out inside the console drops the token from that circuit, but the launch cookie survives
+  until it expires, so a reload re-establishes the vendor session. Shorten
+  `SessionLifetimeMinutes` if that is not what you want.
+
 ## Features
 
 Dark console layout throughout: app bar, resizable schema sidebar, SQL editor, results grid, and a

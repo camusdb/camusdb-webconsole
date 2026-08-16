@@ -147,6 +147,10 @@
                                                          OnClick="() => AddIndexAsync(db, table)">
                                                 Add an Index
                                             </MudMenuItem>
+                                            <MudMenuItem Icon="@Icons.Material.Filled.Comment"
+                                                         OnClick="() => EditCommentsAsync(db, table)">
+                                                Edit Comments
+                                            </MudMenuItem>
                                         </ChildContent>
                                     </MudMenu>
 
@@ -628,6 +632,28 @@
                 if (table.Expanded)
                     await LoadTableDetailsAsync(db, table);
             }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    private async Task EditCommentsAsync(DbEntry db, TableEntry table)
+    {
+        try
+        {
+            await Session.ChangeDatabaseAsync(db.Name, notify: true);
+            if (!table.Loaded)
+                await LoadTableDetailsAsync(db, table);
+
+            var parameters = new DialogParameters<TableCommentsDialog>
+            {
+                { x => x.Table, table.Name },
+                { x => x.Columns, table.Columns.ToList() },
+            };
+
+            await DialogService.ShowAsync<TableCommentsDialog>("Comments", parameters, WideDialogOptions);
         }
         catch (Exception ex)
         {

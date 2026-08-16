@@ -12,6 +12,11 @@
                           Label="Table name"
                           Variant="Variant.Outlined"
                           Immediate="true" />
+            <MudTextField @bind-Value="_tableComment"
+                          Label="Table comment (optional)"
+                          Variant="Variant.Outlined"
+                          Immediate="true"
+                          MaxLength="SqlBuilder.MaxCommentLength" />
 
             <MudText Typo="Typo.subtitle2">Columns</MudText>
             @foreach (ColumnDraft col in _columns)
@@ -20,18 +25,35 @@
                     <MudTextField @bind-Value="col.Name"
                                   Label="Name"
                                   Variant="Variant.Outlined"
+                                  Margin="Margin.Dense"
                                   Immediate="true"
-                                  Style="flex:1; min-width:100px;" />
+                                  Style="flex:1; min-width:90px;" />
                     <MudSelect T="string"
                                @bind-Value="col.Type"
                                Label="Type"
                                Variant="Variant.Outlined"
-                               Style="width:140px;">
+                               Margin="Margin.Dense"
+                               Style="width:120px;">
                         @foreach (string t in SqlBuilder.ColumnTypes)
                         {
                             <MudSelectItem Value="@t">@t</MudSelectItem>
                         }
                     </MudSelect>
+                    <MudTextField @bind-Value="col.Default"
+                                  Label="Default"
+                                  Placeholder="@DefaultPlaceholder(col.Type)"
+                                  HelperText="@DefaultHint(col.Type)"
+                                  Variant="Variant.Outlined"
+                                  Margin="Margin.Dense"
+                                  Immediate="true"
+                                  Style="width:150px;" />
+                    <MudTextField @bind-Value="col.Comment"
+                                  Label="Comment"
+                                  Variant="Variant.Outlined"
+                                  Margin="Margin.Dense"
+                                  Immediate="true"
+                                  MaxLength="SqlBuilder.MaxCommentLength"
+                                  Style="flex:1; min-width:110px;" />
                     <MudCheckBox @bind-Value="col.NotNull" Label="NOT NULL" Dense="true" />
                     <MudCheckBox @bind-Value="col.PrimaryKey" Label="PK" Dense="true" />
                     <MudIconButton Icon="@Icons.Material.Filled.Delete"
@@ -48,6 +70,10 @@
                        OnClick="AddColumn">
                 Add column
             </MudButton>
+
+            <MudField Label="SQL preview" Variant="Variant.Outlined">
+                <pre class="sql-preview">@(Preview() ?? "-- fill in a table name --")</pre>
+            </MudField>
 
             @if (!string.IsNullOrEmpty(_error))
             {
@@ -76,6 +102,7 @@
 
     private string _database = "";
     private string _tableName = "";
+    private string _tableComment = "";
     private readonly List<ColumnDraft> _columns = [];
     private string? _error;
     private bool _busy;
@@ -94,49 +121,116 @@
 
     private void Cancel() => MudDialog.Cancel();
 
-    private async Task CreateAsync()
+    /// <summary>
+    /// The DEFAULT functions this column's type can actually take. The engine demands an exact
+    /// type match, so a column of a type no function returns simply has none to offer.
+    /// </summary>
+    private static string DefaultHint(string type)
     {
-        _error = null;
+        List<string> usable = SqlBuilder.DefaultFunctions
+            .Where(f => SqlBuilder.TryBuildDefaultExpression($"{f.Key}()", type, out _, out _))
+            .Select(f => $"{f.Key}()")
+            .ToList();
+
+        return usable.Count == 0 ? "" : string.Join(", ", usable);
+    }
+
+    private static string DefaultPlaceholder(string type) =>
+        SqlBuilder.IsNumericType(type) ? "0" : SqlBuilder.IsBoolType(type) ? "false" : "value";
+
+    private string? Preview()
+    {
+        if (!TryBuild(out string? sql, out _))
+            return null;
+
+        return sql;
+    }
+
+    /// <summary>
+    /// Validates every field and renders the statement, or reports the first problem. Shared by the
+    /// preview (which discards the error) and Create (which shows it).
+    /// </summary>
+    private bool TryBuild(out string? sql, out string? error)
+    {
+        sql = null;
+        error = null;
 
         if (string.IsNullOrWhiteSpace(_tableName))
         {
-            _error = "Table name is required.";
-            return;
+            error = "Table name is required.";
+            return false;
         }
 
-        List<(string Name, string Type, bool NotNull, bool PrimaryKey)> cols = [];
+        if (!SqlBuilder.TryValidateComment(NullIfEmpty(_tableComment), out error))
+            return false;
+
+        List<ColumnDefinition> cols = [];
         foreach (ColumnDraft c in _columns)
         {
             if (string.IsNullOrWhiteSpace(c.Name))
             {
-                _error = "Every column needs a name.";
-                return;
+                error = "Every column needs a name.";
+                return false;
             }
 
             if (string.IsNullOrWhiteSpace(c.Type))
             {
-                _error = $"Column '{c.Name}' needs a type.";
-                return;
+                error = $"Column '{c.Name}' needs a type.";
+                return false;
             }
 
-            cols.Add((c.Name.Trim(), c.Type.Trim(), c.NotNull || c.PrimaryKey, c.PrimaryKey));
+            if (!SqlBuilder.TryBuildDefaultExpression(c.Default, c.Type, out string? defaultExpr, out string? defaultError))
+            {
+                error = $"Column '{c.Name}': {defaultError}";
+                return false;
+            }
+
+            string? comment = NullIfEmpty(c.Comment);
+            if (!SqlBuilder.TryValidateComment(comment, out string? commentError))
+            {
+                error = $"Column '{c.Name}': {commentError}";
+                return false;
+            }
+
+            cols.Add(new ColumnDefinition(
+                c.Name.Trim(),
+                c.Type.Trim(),
+                c.NotNull || c.PrimaryKey,
+                c.PrimaryKey,
+                defaultExpr,
+                comment));
         }
 
-        string sql;
         try
         {
-            sql = SqlBuilder.BuildCreateTable(_tableName.Trim(), cols);
+            sql = SqlBuilder.BuildCreateTable(_tableName.Trim(), cols, NullIfEmpty(_tableComment));
         }
         catch (Exception ex)
         {
-            _error = ex.Message;
+            error = ex.Message;
+            return false;
+        }
+
+        return true;
+    }
+
+    private static string? NullIfEmpty(string? value) =>
+        string.IsNullOrEmpty(value) ? null : value;
+
+    private async Task CreateAsync()
+    {
+        _error = null;
+
+        if (!TryBuild(out string? sql, out string? error))
+        {
+            _error = error;
             return;
         }
 
         _busy = true;
         try
         {
-            QueryResultModel result = await Queries.ExecuteAsync(sql);
+            QueryResultModel result = await Queries.ExecuteAsync(sql!);
             if (!result.Success)
             {
                 _error = result.ErrorMessage ?? "Create table failed.";
@@ -160,6 +254,8 @@
     {
         public string Name { get; set; } = "";
         public string Type { get; set; } = "STRING";
+        public string Default { get; set; } = "";
+        public string Comment { get; set; } = "";
         public bool NotNull { get; set; }
         public bool PrimaryKey { get; set; }
     }

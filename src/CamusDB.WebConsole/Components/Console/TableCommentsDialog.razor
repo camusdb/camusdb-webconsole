@@ -1,0 +1,213 @@
+@inject SchemaExplorerService Schema
+@inject QueryExecutionService Queries
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <TitleContent>
+        <MudText Typo="Typo.h6">Comments — @_table</MudText>
+    </TitleContent>
+    <DialogContent>
+        @if (_loading)
+        {
+            <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center" Class="mt-2">
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" />
+                <MudText Typo="Typo.body2">Reading SHOW CREATE TABLE…</MudText>
+            </MudStack>
+        }
+        else
+        {
+            <MudStack Spacing="3" Class="mt-2">
+                <MudTextField @bind-Value="_tableComment"
+                              Label="Table comment"
+                              Variant="Variant.Outlined"
+                              Lines="2"
+                              Immediate="true"
+                              MaxLength="SqlBuilder.MaxCommentLength"
+                              HelperText="Clearing the box removes the comment." />
+
+                <MudText Typo="Typo.subtitle2">Columns</MudText>
+                @foreach (CommentDraft col in _columns)
+                {
+                    <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center">
+                        <MudText Typo="Typo.body2" Style="width:180px; overflow:hidden; text-overflow:ellipsis;">
+                            @col.Name
+                            <span class="mud-text-secondary">@col.Type</span>
+                        </MudText>
+                        <MudTextField @bind-Value="col.Comment"
+                                      Label="Comment"
+                                      Variant="Variant.Outlined"
+                                      Margin="Margin.Dense"
+                                      Immediate="true"
+                                      MaxLength="SqlBuilder.MaxCommentLength"
+                                      Style="flex:1;" />
+                    </MudStack>
+                }
+
+                <MudField Label="SQL preview" Variant="Variant.Outlined">
+                    <pre class="sql-preview">@(PendingSql() is { Count: > 0 } stmts
+                        ? string.Join("\n", stmts.Select(s => s + ";"))
+                        : "-- no changes yet --")</pre>
+                </MudField>
+
+                @if (!string.IsNullOrEmpty(_error))
+                {
+                    <MudAlert Severity="Severity.Error" Dense="true">@_error</MudAlert>
+                }
+            </MudStack>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel" Disabled="_busy">Cancel</MudButton>
+        <MudButton Color="Color.Primary"
+                   Variant="Variant.Filled"
+                   OnClick="ApplyAsync"
+                   Disabled="_busy || _loading || PendingSql().Count == 0"
+                   Class="run-btn">
+            @(_busy ? "Applying…" : "Apply")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter]
+    private IMudDialogInstance MudDialog { get; set; } = null!;
+
+    [Parameter]
+    public string Table { get; set; } = "";
+
+    [Parameter]
+    public IReadOnlyList<ColumnSchemaInfo> Columns { get; set; } = [];
+
+    private string _table = "";
+    private string _tableComment = "";
+    private string? _originalTableComment;
+    private readonly List<CommentDraft> _columns = [];
+    private string? _error;
+    private bool _busy;
+    private bool _loading = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _table = Table;
+
+        try
+        {
+            TableCommentInfo comments = await Schema.GetTableCommentsAsync(_table);
+
+            _originalTableComment = comments.TableComment;
+            _tableComment = comments.TableComment ?? "";
+
+            foreach (ColumnSchemaInfo col in Columns)
+            {
+                comments.ColumnComments.TryGetValue(col.Name, out string? existing);
+                _columns.Add(new CommentDraft
+                {
+                    Name = col.Name,
+                    Type = col.Type ?? "",
+                    Original = existing,
+                    Comment = existing ?? "",
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    /// <summary>
+    /// One COMMENT ON statement per field the user actually changed. An emptied box becomes
+    /// <c>IS NULL</c> (remove), which is what the server distinguishes from <c>IS ''</c> — so a
+    /// comment that was already empty-but-present is left alone rather than silently removed.
+    /// </summary>
+    private List<string> PendingSql()
+    {
+        List<string> statements = [];
+
+        if (_table.Length == 0)
+            return statements;
+
+        string? table = NullIfEmpty(_tableComment);
+        if (!string.Equals(table, _originalTableComment, StringComparison.Ordinal))
+            statements.Add(SqlBuilder.BuildCommentOnTable(_table, table));
+
+        foreach (CommentDraft col in _columns)
+        {
+            string? next = NullIfEmpty(col.Comment);
+            if (!string.Equals(next, col.Original, StringComparison.Ordinal))
+                statements.Add(SqlBuilder.BuildCommentOnColumn(_table, col.Name, next));
+        }
+
+        return statements;
+    }
+
+    private static string? NullIfEmpty(string? value) =>
+        string.IsNullOrEmpty(value) ? null : value;
+
+    private async Task ApplyAsync()
+    {
+        _error = null;
+
+        if (!SqlBuilder.TryValidateComment(NullIfEmpty(_tableComment), out _error))
+            return;
+
+        foreach (CommentDraft col in _columns)
+        {
+            if (!SqlBuilder.TryValidateComment(NullIfEmpty(col.Comment), out string? columnError))
+            {
+                _error = $"Column '{col.Name}': {columnError}";
+                return;
+            }
+        }
+
+        List<string> statements = PendingSql();
+        if (statements.Count == 0)
+            return;
+
+        _busy = true;
+        try
+        {
+            // Each COMMENT ON is its own statement; stop at the first failure so the reported error
+            // names the statement that actually failed, and the rest stay unapplied.
+            foreach (string sql in statements)
+            {
+                QueryResultModel result = await Queries.ExecuteAsync(sql);
+                if (!result.Success)
+                {
+                    _error = $"{result.ErrorMessage ?? "Statement failed."}\n{sql}";
+                    return;
+                }
+            }
+
+            Snackbar.Add(
+                $"{statements.Count} comment{(statements.Count == 1 ? "" : "s")} updated on '{_table}'.",
+                Severity.Success);
+            MudDialog.Close(DialogResult.Ok(true));
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private sealed class CommentDraft
+    {
+        public string Name { get; set; } = "";
+        public string Type { get; set; } = "";
+
+        /// <summary>What the server currently holds; null when the element has no comment.</summary>
+        public string? Original { get; set; }
+
+        public string Comment { get; set; } = "";
+    }
+}

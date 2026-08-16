@@ -1,8 +1,9 @@
 @inject CamusSessionService Session
+@inject ConsoleBranding Branding
 @implements IDisposable
 
 <footer class="console-footer">
-    <span>CamusDB Web Console</span>
+    <span>@Branding.Name</span>
     <span>
         <span class="conn-dot @(Session.IsConnected ? "on" : "off")"></span>
         @(Session.IsConnected ? "Connected" : "Disconnected")

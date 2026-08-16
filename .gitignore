@@ -1,2 +1,9 @@
 src/CamusDB.WebConsole/bin/
 src/CamusDB.WebConsole/obj/
+.DS_Store
+.serena/
+
+# test/e2e artifacts — every run writes dot-prefixed logs; keep the pattern, not a list
+test/e2e/node_modules/
+test/e2e/.*.log
+test/e2e/branded-console.png

@@ -1,4 +1,11 @@
-﻿<!DOCTYPE html>
+﻿@using CamusDB.WebConsole.Endpoints
+@using CamusDB.WebConsole.Models
+@using CamusDB.WebConsole.Options
+@using Microsoft.Extensions.Options
+@inject ConsoleLaunchStore LaunchStore
+@inject IOptions<ConsoleLaunchOptions> LaunchOptions
+
+<!DOCTYPE html>
 <html lang="en">
 
 <head>
@@ -15,7 +22,7 @@
 </head>
 
 <body>
-    <Routes @rendermode="InteractiveServer" />
+    <Routes @rendermode="InteractiveServer" BrandName="@_brandName" LaunchHandoff="@_launchHandoff" />
     <ReconnectModal />
     <script src="_content/BlazorMonaco/jsInterop.js"></script>
     <script src="_content/BlazorMonaco/lib/monaco-editor/min/vs/loader.js"></script>
@@ -28,3 +35,46 @@
 </body>
 
 </html>
+
+@code {
+    /*
+     * This is the only component that can read the launch cookie. HttpContext is cascaded to
+     * statically-rendered root components and is gone by the time the interactive circuit starts, so
+     * whatever the circuit needs has to be handed to it from here as a parameter.
+     *
+     * What gets handed over is a single-use handoff, never the session id: parameters to an
+     * InteractiveServer component are round-tripped through the page, and a session-lifetime secret
+     * has no business going there. The handoff is spent by the circuit within milliseconds and is
+     * worthless afterwards. The token itself never appears in either place.
+     */
+
+    [CascadingParameter]
+    private HttpContext? HttpContext { get; set; }
+
+    /// <summary>
+    /// Null unless a vendor launch is in play. ConsoleBranding already defaults to the configured
+    /// name, so passing that down here would only make every session look vendor-branded.
+    /// </summary>
+    private string? _brandName;
+
+    private string? _launchHandoff;
+
+    protected override void OnInitialized()
+    {
+        if (HttpContext is null || !LaunchOptions.Value.Enabled)
+            return;
+
+        bool secure = HttpContext.Request.IsHttps || LaunchOptions.Value.RequireHttps;
+        string? sessionId = HttpContext.Request.Cookies[ConsoleLaunchEndpoints.CookieName(secure)];
+
+        if (!LaunchStore.TryGetSession(sessionId, out ConsoleLaunchTicket? ticket) || ticket is null)
+            return;
+
+        // Painted into the static render too, so the branded name is on screen before the circuit
+        // connects rather than flashing the default first.
+        _brandName = ticket.BrandName;
+
+        if (LaunchStore.TryIssueHandoff(sessionId, out string handoff))
+            _launchHandoff = handoff;
+    }
+}

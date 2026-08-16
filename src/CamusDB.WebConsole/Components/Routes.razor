@@ -1,6 +1,40 @@
-﻿<Router AppAssembly="typeof(Program).Assembly" NotFoundPage="typeof(Pages.NotFound)">
+@using CamusDB.WebConsole.Models
+@inject ConsoleBranding Branding
+@inject ConsoleLaunchStore LaunchStore
+@inject CamusSessionService Session
+
+<Router AppAssembly="typeof(Program).Assembly" NotFoundPage="typeof(Pages.NotFound)">
     <Found Context="routeData">
         <RouteView RouteData="routeData" DefaultLayout="typeof(Layout.MainLayout)" />
         <FocusOnNavigate RouteData="routeData" Selector="h1" />
     </Found>
 </Router>
+
+@code {
+    /// <summary>Console name resolved by the static render — see the note in App.razor.</summary>
+    [Parameter]
+    public string? BrandName { get; set; }
+
+    /// <summary>Single-use handoff that buys this circuit the launch ticket, or null when there is none.</summary>
+    [Parameter]
+    public string? LaunchHandoff { get; set; }
+
+    protected override void OnInitialized()
+    {
+        // Both renders need the name: the static pass and the circuit have separate DI scopes, so
+        // each gets its own ConsoleBranding and neither can see the other's.
+        Branding.Apply(BrandName);
+
+        // The handoff is single use. This component renders twice — once prerendered, once in the
+        // circuit — and the prerender pass would otherwise spend it before the circuit that needs it
+        // exists, leaving the visitor branded but unauthenticated.
+        if (!RendererInfo.IsInteractive || string.IsNullOrEmpty(LaunchHandoff))
+            return;
+
+        if (!LaunchStore.TryRedeemHandoff(LaunchHandoff, out ConsoleLaunchTicket? ticket) || ticket is null)
+            return;
+
+        Branding.Apply(ticket.BrandName);
+        Session.ApplyLaunchTicket(ticket);
+    }
+}

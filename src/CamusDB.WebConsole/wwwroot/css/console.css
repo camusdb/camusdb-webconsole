@@ -733,6 +733,19 @@ html, body {
     font-weight: 600 !important;
 }
 
+/* Read-only rendering of the DDL a dialog is about to run. */
+.sql-preview {
+    margin: 0;
+    font-family: var(--camus-mono);
+    font-size: 0.78rem;
+    line-height: 1.5;
+    color: var(--camus-text);
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 160px;
+    overflow-y: auto;
+}
+
 .configure-btn {
     background: var(--camus-pink) !important;
     color: #fff !important;

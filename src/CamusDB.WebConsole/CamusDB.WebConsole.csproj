@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
-    <Version>0.9.4</Version>
+    <Version>0.9.5</Version>
     <Description>CamusDB.WebConsole allows database management from a Web UI.</Description>
     <Authors>CamusDB</Authors>
     <Company>CamusDB</Company>

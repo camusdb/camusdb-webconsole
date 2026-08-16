@@ -1,5 +1,6 @@
 using System.Data;
 using CamusDB.Client;
+using CamusDB.WebConsole.Models;
 using CamusDB.WebConsole.Options;
 using Microsoft.Extensions.Options;
 
@@ -124,7 +125,14 @@ public sealed class CamusSessionService : IAsyncDisposable
         : Endpoint;
 
     /// <summary>True when server configuration pins the endpoint and protocol — see <see cref="CamusDbOptions.LockEndpoint"/>.</summary>
-    public bool EndpointLocked { get; }
+    public bool EndpointLocked { get; private set; }
+
+    /// <summary>
+    /// True when this circuit was opened by a vendor launch. The console then holds a token it did
+    /// not mint and cannot show, and its database was chosen by the vendor rather than by the
+    /// visitor — so remembered browser preferences must not override it.
+    /// </summary>
+    public bool IsVendorSession { get; private set; }
 
     /// <summary>User the console authenticates as, or empty when connecting unauthenticated.</summary>
     public string User { get; private set; }
@@ -202,6 +210,51 @@ public sealed class CamusSessionService : IAsyncDisposable
             return;
 
         User = user.Trim();
+    }
+
+    /// <summary>
+    /// Applies a vendor launch ticket before the first connect. Called once, from the interactive
+    /// circuit, with a ticket that never left the server.
+    ///
+    /// <para>The token is stored in the same private field a configured <c>AccessToken</c> uses, so
+    /// it is reachable only through <see cref="UsesSuppliedToken"/> — there is no getter that hands
+    /// it back, and the Configure dialog never prefills it.</para>
+    ///
+    /// <para>A ticket that pins the endpoint also locks it: the visitor of a vendor-provisioned
+    /// console must not be able to repoint it at another server and carry the vendor's token there.</para>
+    /// </summary>
+    public void ApplyLaunchTicket(ConsoleLaunchTicket ticket)
+    {
+        ArgumentNullException.ThrowIfNull(ticket);
+
+        // Arriving after a connection is open would mean a second handoff into a live circuit;
+        // there is no such path, and honouring it would swap credentials underneath open state.
+        if (IsConnected)
+            return;
+
+        IsVendorSession = true;
+
+        if (!string.IsNullOrEmpty(ticket.AccessToken))
+        {
+            // A supplied token and a user/password pair are exclusive in the driver.
+            _accessToken = ticket.AccessToken;
+            User = "";
+            _password = null;
+        }
+
+        if (!string.IsNullOrWhiteSpace(ticket.Database))
+            Database = ticket.Database.Trim();
+
+        if (!string.IsNullOrWhiteSpace(ticket.Protocol))
+            Protocol = ticket.Protocol.Trim();
+
+        if (!string.IsNullOrWhiteSpace(ticket.Endpoint))
+        {
+            Endpoint = ticket.Endpoint.Trim();
+            EndpointLocked = true;
+        }
+
+        NotifyChanged();
     }
 
     public CamusConnection GetConnection()

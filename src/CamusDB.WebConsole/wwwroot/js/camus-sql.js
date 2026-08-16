@@ -44,11 +44,13 @@
             'EXPLAIN', 'FALSE', 'FOR', 'FORCE', 'FROM', 'GRANT',
             'GRANTS', 'GROUP', 'HAVING', 'IDENTIFIED', 'IF', 'INCLUDE',
             'INDEX', 'INDEXES', 'INNER', 'INSERT', 'INTO', 'JOIN',
-            'KEY', 'LIMIT', 'NULL', 'OFFSET', 'ON', 'ORDER',
-            'ORPHAN', 'PRIMARY', 'PRIVILEGES', 'RELINK', 'RENAME', 'REVOKE',
+            'KEY', 'LIMIT', 'MATERIALIZED', 'NULL', 'OFFSET', 'ON',
+            'ORDER', 'ORPHAN', 'PRIMARY', 'PRIVILEGES', 'REFRESH', 'RELINK',
+            'RENAME', 'RESET', 'REVOKE',
             'ROLLBACK', 'SELECT', 'SET', 'SHOW', 'START', 'TABLE',
             'TABLES', 'THEN', 'TO', 'TRANSACTION', 'TRUE', 'UNIQUE',
-            'UPDATE', 'USER', 'VALUES', 'WHEN', 'WHERE', 'WITH',
+            'UPDATE', 'USER', 'VALUES', 'VIEW', 'VIEWS', 'WHEN',
+            'WHERE', 'WITH',
         ],
 
         operators: [
@@ -64,18 +66,22 @@
             'VARCHAR',
         ],
 
+        // Registered scalar functions plus the five aggregates. Aliases count: the registry resolves
+        // CEILING/POWER/NVL/NOW to the same descriptors as CEIL/POW/IFNULL/CURRENT_TIMESTAMP, so
+        // leaving them out colored a call the engine accepts as a plain identifier.
         builtinFunctions: [
-            'ABS', 'AVG', 'CEIL', 'COALESCE', 'CONCAT', 'CONTAINS',
-            'COUNT', 'COUNT_DISTINCT', 'CURRENT_DATE', 'CURRENT_TIMESTAMP', 'DATE_ADD', 'DATE_DIFF',
-            'DATE_PART', 'DATE_TRUNC', 'ENDS_WITH', 'FLOOR', 'FROM_UNIXTIME', 'GEN_ID',
-            'GEN_UUID_V4', 'GEN_UUID_V7', 'IFNULL', 'JSON_ARRAY_LENGTH', 'JSON_CONTAINS', 'JSON_EXTRACT',
-            'JSON_TYPE', 'JSON_VALID', 'JSON_VALUE', 'LENGTH', 'LOWER', 'LTRIM',
-            'MAX', 'MIN', 'MOD', 'POW', 'RANDOM', 'REGEXP_COUNT',
-            'REGEXP_INSTR', 'REGEXP_LIKE', 'REGEXP_MATCH', 'REGEXP_MATCHES', 'REGEXP_REPLACE', 'REGEXP_SPLIT_TO_ARRAY',
-            'REGEXP_SPLIT_TO_TABLE', 'REGEXP_SUBSTR', 'REPLACE', 'ROUND', 'RTRIM', 'SIGN',
-            'SQRT', 'STARTS_WITH', 'SUBSTRING', 'SUM', 'TO_BOOL', 'TO_BYTES',
-            'TO_DATE', 'TO_DATETIME', 'TO_FLOAT32', 'TO_FLOAT64', 'TO_ID', 'TO_INT64',
-            'TO_STRING', 'TRIM', 'UNIX_TIMESTAMP', 'UPPER',
+            'ABS', 'AVG', 'CEIL', 'CEILING', 'COALESCE', 'CONCAT',
+            'CONTAINS', 'COUNT', 'COUNT_DISTINCT', 'CURRENT_DATABASE', 'CURRENT_DATE', 'CURRENT_ROLE',
+            'CURRENT_TIMESTAMP', 'CURRENT_USER', 'DATE_ADD', 'DATE_DIFF', 'DATE_PART', 'DATE_TRUNC',
+            'ENDS_WITH', 'FLOOR', 'FROM_UNIXTIME', 'GEN_ID', 'GEN_UUID_V4', 'GEN_UUID_V7',
+            'IFNULL', 'IS_SUPERUSER', 'JSON_ARRAY_LENGTH', 'JSON_CONTAINS', 'JSON_EXTRACT', 'JSON_TYPE',
+            'JSON_VALID', 'JSON_VALUE', 'LENGTH', 'LOWER', 'LTRIM', 'MAX',
+            'MIN', 'MOD', 'NOW', 'NVL', 'POW', 'POWER',
+            'RANDOM', 'REGEXP_COUNT', 'REGEXP_INSTR', 'REGEXP_LIKE', 'REGEXP_MATCH', 'REGEXP_MATCHES',
+            'REGEXP_REPLACE', 'REGEXP_SPLIT_TO_ARRAY', 'REGEXP_SPLIT_TO_TABLE', 'REGEXP_SUBSTR', 'REPLACE', 'ROUND',
+            'RTRIM', 'SIGN', 'SQRT', 'STARTS_WITH', 'SUBSTRING', 'SUM',
+            'TO_BOOL', 'TO_BYTES', 'TO_DATE', 'TO_DATETIME', 'TO_FLOAT32', 'TO_FLOAT64',
+            'TO_ID', 'TO_INT64', 'TO_STRING', 'TRIM', 'UNIX_TIMESTAMP', 'UPPER',
         ],
 
         tokenizer: {

@@ -1,9 +1,10 @@
 @page "/admin"
 @inject CamusSessionService Session
 @inject NavigationManager Navigation
+@inject ConsoleBranding Branding
 @implements IDisposable
 
-<PageTitle>Administration · CamusDB Web Console</PageTitle>
+<PageTitle>@Branding.PageTitle("Administration")</PageTitle>
 
 <div class="console-main admin-page">
     <div class="admin-header">

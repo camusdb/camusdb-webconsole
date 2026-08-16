@@ -76,6 +76,38 @@ public sealed class SchemaExplorerService
         return columns;
     }
 
+    /// <summary>
+    /// Reads the table's DDL. SHOW CREATE TABLE yields one row of (Table, Create Table); the second
+    /// value is the statement text.
+    /// </summary>
+    public async Task<string?> ShowCreateTableAsync(
+        string table,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(table);
+
+        List<object?[]> rows = await QueryAsync(SqlBuilder.BuildShowCreateTable(table), cancellationToken)
+            .ConfigureAwait(false);
+
+        if (rows.Count == 0)
+            return null;
+
+        object?[] row = rows[0];
+        return row.Length > 1 ? Convert.ToString(row[1]) : Convert.ToString(row.ElementAtOrDefault(0));
+    }
+
+    /// <summary>
+    /// Table and per-column comments. SHOW COLUMNS does not carry them, so they are recovered from
+    /// the DDL that SHOW CREATE TABLE emits.
+    /// </summary>
+    public async Task<TableCommentInfo> GetTableCommentsAsync(
+        string table,
+        CancellationToken cancellationToken = default)
+    {
+        string? ddl = await ShowCreateTableAsync(table, cancellationToken).ConfigureAwait(false);
+        return ShowCreateTableParser.Parse(ddl);
+    }
+
     public async Task<IReadOnlyList<IndexSchemaInfo>> ListIndexesAsync(
         string table,
         CancellationToken cancellationToken = default)

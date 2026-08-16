@@ -1,0 +1,16 @@
+{
+  "name": "camusdb-webconsole-e2e",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Browser end-to-end checks for the vendor launch handoff.",
+  "scripts": {
+    "test": "./run.sh",
+    "test:circuit": "./run.sh circuit",
+    "test:controls": "./run.sh controls",
+    "screenshot": "./run.sh screenshot",
+    "postinstall": "playwright install chromium"
+  },
+  "dependencies": {
+    "playwright": "^1.62.1"
+  }
+}
