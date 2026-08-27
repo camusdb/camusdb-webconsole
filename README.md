@@ -2,6 +2,8 @@
 
 Blazor Interactive Server + MudBlazor web UI for [CamusDB](https://github.com/camusdb/camusdb), built against the [`CamusDB.Client`](https://www.nuget.org/packages/CamusDB.Client) ADO.NET provider.
 
+<img width="939" height="705" alt="webconsole" src="https://github.com/user-attachments/assets/fc36a236-1328-4ddd-a724-1e4f70756094" />
+
 ## Requirements
 
 - A running CamusDB instance (REST default port `5095`, gRPC `5096`)
