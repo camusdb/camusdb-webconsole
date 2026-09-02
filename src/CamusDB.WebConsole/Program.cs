@@ -49,6 +49,7 @@ builder.Services.AddRazorComponents()
 
 var app = builder.Build();
 
+ValidateCamusDbOptions(app);
 ValidateConsoleLaunchOptions(app);
 
 if (!app.Environment.IsDevelopment())
@@ -77,6 +78,33 @@ app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
 
 app.Run();
+
+/// <summary>
+/// Fails startup when the console is told to accept tokens only while a user or a password is also
+/// configured. The two cannot both be honoured, and dropping the credentials quietly would leave an
+/// operator looking at an unauthenticated console with nothing to explain it.
+/// </summary>
+static void ValidateCamusDbOptions(WebApplication app)
+{
+    CamusDbOptions camus = app.Services
+        .GetRequiredService<Microsoft.Extensions.Options.IOptions<CamusDbOptions>>().Value;
+
+    if (!camus.RequireAccessToken)
+        return;
+
+    if (!string.IsNullOrWhiteSpace(camus.User) || !string.IsNullOrEmpty(camus.Password))
+    {
+        throw new InvalidOperationException(
+            $"{CamusDbOptions.SectionName}:RequireAccessToken is true, so this console accepts an access "
+            + $"token only. Clear {CamusDbOptions.SectionName}:User and {CamusDbOptions.SectionName}:Password "
+            + $"(CamusDB__User, CamusDB__Password), or turn the flag off.");
+    }
+
+    app.Logger.LogInformation(
+        "{Section}:RequireAccessToken is on: user/password sign-in is refused and the Configure dialog "
+        + "offers an access token only.",
+        CamusDbOptions.SectionName);
+}
 
 /// <summary>
 /// Fails startup rather than serving a half-configured launch surface. Both checks guard something

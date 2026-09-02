@@ -35,6 +35,23 @@ public sealed class CamusDbOptions
     public string AccessToken { get; set; } = "";
 
     /// <summary>
+    /// Refuse user/password sign-in. The console then authenticates only with a token supplied
+    /// verbatim — from <see cref="AccessToken"/>, from a vendor launch, or typed into the Configure
+    /// dialog — and never holds a password. Off by default.
+    ///
+    /// <para>This pins the <em>method</em>, not the presence of authentication. Against a server
+    /// with authentication disabled the console still connects unauthenticated, exactly as it does
+    /// with the flag off; the server decides whether an identity is required. Set
+    /// <c>CamusDB__RequireAccessToken=true</c> where the token is minted by something else — an SSO
+    /// broker, a vendor launch — and the console must never be a place a password is typed.</para>
+    ///
+    /// <para>Startup fails when this is set together with <see cref="User"/> or
+    /// <see cref="Password"/>, rather than ignoring them: a console that silently dropped configured
+    /// credentials would look unauthenticated for no visible reason.</para>
+    /// </summary>
+    public bool RequireAccessToken { get; set; }
+
+    /// <summary>
     /// When true, the Configure dialog cannot repoint the console at a different server: endpoint and
     /// protocol stay fixed to the configured values. Enable this (CamusDB__LockEndpoint=true) whenever
     /// the console is reachable beyond localhost, so a visitor cannot use the server as a proxy to

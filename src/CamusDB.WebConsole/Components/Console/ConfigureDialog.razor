@@ -8,76 +8,111 @@
     </TitleContent>
     <DialogContent>
         <MudStack Spacing="3" Class="mt-2">
-            <MudTextField @bind-Value="_endpoint"
-                          Label="Endpoint"
-                          Variant="Variant.Outlined"
-                          Immediate="true"
-                          Disabled="Session.EndpointLocked"
-                          HelperText="@(Session.EndpointLocked ? "Locked by server configuration." : "e.g. http://localhost:5095 (REST) or http://localhost:5096 (gRPC)")" />
+            @* A locked endpoint is not rendered at all, rather than rendered disabled. Disabled still
+               shows it, and a visitor who cannot change the address has no use for it — while on a
+               console reachable from the internet it describes the operator's internal network. The
+               value still travels to Connect through _endpoint, which the dialog read from the
+               session. *@
+            @if (!Session.EndpointLocked)
+            {
+                <MudTextField @bind-Value="_endpoint"
+                              Label="Endpoint"
+                              Variant="Variant.Outlined"
+                              Immediate="true"
+                              HelperText="e.g. http://localhost:5095 (REST) or http://localhost:5096 (gRPC)" />
+            }
             <MudTextField @bind-Value="_database"
                           Label="Database"
                           Variant="Variant.Outlined"
                           Immediate="true" />
-            <MudSelect T="string" @bind-Value="_protocol" Label="Protocol" Variant="Variant.Outlined" Disabled="Session.EndpointLocked">
-                <MudSelectItem Value="@("rest")">REST</MudSelectItem>
-                <MudSelectItem Value="@("grpc")">gRPC</MudSelectItem>
-            </MudSelect>
+            @if (!Session.EndpointLocked)
+            {
+                <MudSelect T="string" @bind-Value="_protocol" Label="Protocol" Variant="Variant.Outlined">
+                    <MudSelectItem Value="@("rest")">REST</MudSelectItem>
+                    <MudSelectItem Value="@("grpc")">gRPC</MudSelectItem>
+                </MudSelect>
+            }
+            else
+            {
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                    The server and the protocol are fixed by this console's configuration.
+                </MudText>
+            }
 
             <MudDivider Class="mt-1" />
             <MudText Typo="Typo.subtitle2" Class="mud-text-secondary">
                 Authentication
             </MudText>
-            <MudText Typo="Typo.caption" Class="mud-text-secondary">
-                Leave empty against a server with authentication disabled — the default for a fresh
-                CamusDB install. The password is exchanged once for a short-lived token and is never
-                stored in the browser.
-            </MudText>
+            @if (Session.RequiresAccessToken)
+            {
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                    This console accepts an access token only (CamusDB:RequireAccessToken), so user and
+                    password sign-in is disabled. Leave the field empty against a server with
+                    authentication disabled.
+                </MudText>
+            }
+            else
+            {
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                    Leave empty against a server with authentication disabled — the default for a fresh
+                    CamusDB install. The password is exchanged once for a short-lived token and is never
+                    stored in the browser.
+                </MudText>
+            }
 
-            <MudTabs Elevation="0"
-                     Rounded="true"
-                     ActivePanelIndex="_authMode"
-                     ActivePanelIndexChanged="OnAuthModeChanged">
-                <MudTabPanel Text="User / password">
-                    <MudStack Spacing="3" Class="mt-3">
-                        <MudTextField @bind-Value="_user"
-                                      Label="User"
-                                      Variant="Variant.Outlined"
-                                      Immediate="true"
-                                      autocomplete="username"
-                                      HelperText="Empty connects without authentication." />
-                        <MudTextField @bind-Value="_password"
-                                      Label="Password"
-                                      Variant="Variant.Outlined"
-                                      Immediate="true"
-                                      autocomplete="current-password"
-                                      InputType="@(_showPassword ? InputType.Text : InputType.Password)"
-                                      Adornment="Adornment.End"
-                                      AdornmentIcon="@(_showPassword ? Icons.Material.Filled.VisibilityOff : Icons.Material.Filled.Visibility)"
-                                      OnAdornmentClick="TogglePasswordVisibility"
-                                      AdornmentAriaLabel="Show password" />
-                    </MudStack>
-                </MudTabPanel>
-                <MudTabPanel Text="Access token">
-                    <MudStack Spacing="3" Class="mt-3">
-                        <MudTextField @bind-Value="_accessToken"
-                                      Label="Access token"
-                                      Variant="Variant.Outlined"
-                                      Immediate="true"
-                                      InputType="InputType.Password"
-                                      HelperText="A token obtained elsewhere, sent verbatim. The console cannot renew it, so the session ends when the server expires it." />
-                    </MudStack>
-                </MudTabPanel>
-            </MudTabs>
+            @* One panel is not a choice, so the tab strip is dropped rather than shown with a single
+               tab. The field itself is defined once, in AccessTokenField, so the two branches cannot
+               drift apart. *@
+            @if (Session.RequiresAccessToken)
+            {
+                <MudStack Spacing="3" Class="mt-3">
+                    @AccessTokenField
+                </MudStack>
+            }
+            else
+            {
+                <MudTabs Elevation="0"
+                         Rounded="true"
+                         ActivePanelIndex="_authMode"
+                         ActivePanelIndexChanged="OnAuthModeChanged">
+                    <MudTabPanel Text="User / password">
+                        <MudStack Spacing="3" Class="mt-3">
+                            <MudTextField @bind-Value="_user"
+                                          Label="User"
+                                          Variant="Variant.Outlined"
+                                          Immediate="true"
+                                          autocomplete="username"
+                                          HelperText="Empty connects without authentication." />
+                            <MudTextField @bind-Value="_password"
+                                          Label="Password"
+                                          Variant="Variant.Outlined"
+                                          Immediate="true"
+                                          autocomplete="current-password"
+                                          InputType="@(_showPassword ? InputType.Text : InputType.Password)"
+                                          Adornment="Adornment.End"
+                                          AdornmentIcon="@(_showPassword ? Icons.Material.Filled.VisibilityOff : Icons.Material.Filled.Visibility)"
+                                          OnAdornmentClick="TogglePasswordVisibility"
+                                          AdornmentAriaLabel="Show password" />
+                        </MudStack>
+                    </MudTabPanel>
+                    <MudTabPanel Text="Access token">
+                        <MudStack Spacing="3" Class="mt-3">
+                            @AccessTokenField
+                        </MudStack>
+                    </MudTabPanel>
+                </MudTabs>
+            }
 
+            @if (!Session.EndpointLocked)
+            {
+                <MudDivider Class="mt-1" />
+                <MudTextField @bind-Value="_backupEndpoint"
+                              Label="Backup endpoint (optional)"
+                              Variant="Variant.Outlined"
+                              Immediate="true"
+                              HelperText="Defaults to the endpoint above. Set it for a gRPC connection (the backup API is REST-only) or to pin a multi-node pool at the coordinator." />
+            }
             <MudDivider Class="mt-1" />
-            <MudTextField @bind-Value="_backupEndpoint"
-                          Label="Backup endpoint (optional)"
-                          Variant="Variant.Outlined"
-                          Immediate="true"
-                          Disabled="Session.EndpointLocked"
-                          HelperText="@(Session.EndpointLocked
-                              ? "Locked by server configuration."
-                              : "Defaults to the endpoint above. Set it for a gRPC connection (the backup API is REST-only) or to pin a multi-node pool at the coordinator.")" />
 
             <MudNumericField @bind-Value="_timeoutSeconds"
                              Label="Timeout (seconds)"
@@ -128,6 +163,17 @@
     private string? _error;
     private bool _busy;
 
+    /// <summary>
+    /// The access token field, defined once and rendered by both branches of the authentication
+    /// section — with the tab strip when a choice exists, on its own when it does not.
+    /// </summary>
+    private RenderFragment AccessTokenField => @<MudTextField @bind-Value="_accessToken"
+                                                              Label="Access token"
+                                                              Variant="Variant.Outlined"
+                                                              Immediate="true"
+                                                              InputType="InputType.Password"
+                                                              HelperText="A token obtained elsewhere, sent verbatim. The console cannot renew it, so the session ends when the server expires it." />;
+
     protected override async Task OnInitializedAsync()
     {
         _endpoint = Session.Endpoint;
@@ -137,10 +183,11 @@
         _maxRows = Session.MaxRows;
         _backupEndpoint = Session.BackupEndpoint;
         _user = Session.User;
-        _authMode = Session.UsesSuppliedToken ? AccessTokenTab : UserPasswordTab;
+        _authMode = Session.UsesSuppliedToken || Session.RequiresAccessToken ? AccessTokenTab : UserPasswordTab;
 
         // The password is never persisted; the user name is, so a reconnect only needs the secret.
-        if (string.IsNullOrEmpty(_user))
+        // A console that refuses user/password sign-in has no field to prefill.
+        if (string.IsNullOrEmpty(_user) && !Session.RequiresAccessToken)
         {
             try
             {
@@ -194,7 +241,8 @@
             string identity = Session.IsAuthenticated
                 ? Session.UsesSuppliedToken ? " as a token holder" : $" as {Session.User}"
                 : "";
-            Snackbar.Add($"Connected to {Session.Database} @ {Session.Endpoint}{identity}", Severity.Success);
+            string where = Session.EndpointLocked ? Session.Database : $"{Session.Database} @ {Session.Endpoint}";
+            Snackbar.Add($"Connected to {where}{identity}", Severity.Success);
             MudDialog.Close(DialogResult.Ok(true));
         }
         catch (Exception ex)

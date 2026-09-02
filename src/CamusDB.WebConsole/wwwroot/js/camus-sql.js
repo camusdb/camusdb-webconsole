@@ -102,6 +102,19 @@
                 { include: '@numbers' },
                 { include: '@strings' },
                 { include: '@complexIdentifiers' },
+                // One "table@index" pair, as SHOW RANGES / SHOW RANGE ... FROM INDEX accepts it. The
+                // scanner matches it as a single TQUALIFIED_INDEX token, so the console must too: left
+                // to the rule below, "users@users_pkey" splits into the identifier `users` plus a
+                // `@users_pkey` painted as a bind parameter the user never wrote.
+                //
+                // The index half admits a leading '~' because the primary index's internal name is
+                // "~pk", and that is the spelling SHOW INDEXES prints.
+                //
+                // An identifier character must precede the '@', so "= @p", "LIMIT @n" and
+                // "VALUES(@a, @b)" stay parameters. This rule precedes '@scopes' as well, so a table
+                // whose name is a keyword — "end@~pk" — is not split at the keyword either.
+                [/[A-Za-z_]\w*@~?[A-Za-z_]\w*/, 'identifier'],
+
                 { include: '@scopes' },
 
                 // Query parameters: @name, as bound by CamusCommand.Parameters.

@@ -7,7 +7,10 @@
     <span>
         <span class="conn-dot @(Session.IsConnected ? "on" : "off")"></span>
         @(Session.IsConnected ? "Connected" : "Disconnected")
-        @if (!string.IsNullOrEmpty(Session.Endpoint))
+        @* Not shown when the deployment locked it. A visitor cannot change that endpoint, so the
+           address tells them nothing they can act on — and on a console reachable from the internet
+           it is a description of the operator's internal network, printed on every page. *@
+        @if (!Session.EndpointLocked && !string.IsNullOrEmpty(Session.Endpoint))
         {
             <text> · @Session.Endpoint</text>
         }

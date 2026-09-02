@@ -89,8 +89,12 @@ public sealed class CamusSessionService : IAsyncDisposable
         BackupEndpoint = o.BackupEndpoint.Trim();
         BackupTimeoutSeconds = o.BackupTimeoutSeconds;
 
-        User = o.User.Trim();
-        _password = string.IsNullOrEmpty(o.Password) ? null : o.Password;
+        RequiresAccessToken = o.RequireAccessToken;
+
+        // Startup already refuses this combination, so reaching here with credentials means the
+        // service was built outside the host. Dropping them keeps the one invariant the flag states.
+        User = RequiresAccessToken ? "" : o.User.Trim();
+        _password = RequiresAccessToken || string.IsNullOrEmpty(o.Password) ? null : o.Password;
         _accessToken = string.IsNullOrWhiteSpace(o.AccessToken) ? null : o.AccessToken.Trim();
     }
 
@@ -126,6 +130,13 @@ public sealed class CamusSessionService : IAsyncDisposable
 
     /// <summary>True when server configuration pins the endpoint and protocol — see <see cref="CamusDbOptions.LockEndpoint"/>.</summary>
     public bool EndpointLocked { get; private set; }
+
+    /// <summary>
+    /// True when this deployment accepts a supplied access token as the only way to authenticate —
+    /// see <see cref="CamusDbOptions.RequireAccessToken"/>. It does not require authentication: an
+    /// unauthenticated connection to a server that permits one is still allowed.
+    /// </summary>
+    public bool RequiresAccessToken { get; }
 
     /// <summary>
     /// True when this circuit was opened by a vendor launch. The console then holds a token it did
@@ -206,6 +217,11 @@ public sealed class CamusSessionService : IAsyncDisposable
     /// </summary>
     public void PreferUser(string user)
     {
+        // A remembered name would prefill a dialog that no longer offers the field, and would then
+        // be reported as this session's identity while the token is what actually authenticated it.
+        if (RequiresAccessToken)
+            return;
+
         if (IsConnected || string.IsNullOrWhiteSpace(user) || !string.IsNullOrEmpty(User))
             return;
 
@@ -295,9 +311,9 @@ public sealed class CamusSessionService : IAsyncDisposable
         {
             await CleanupConnectionAsync().ConfigureAwait(false);
             _connected = false;
-            _lastError = $"{ex.Code}: {Describe(ex)}";
+            _lastError = $"{ex.Code}: {Describe(ex, RequiresAccessToken)}";
             RequiresAuthentication = ex.Code == AuthFailedCode;
-            throw new CamusException(ex.Code, Describe(ex));
+            throw new CamusException(ex.Code, Describe(ex, RequiresAccessToken));
         }
         catch (Exception ex)
         {
@@ -342,8 +358,17 @@ public sealed class CamusSessionService : IAsyncDisposable
     /// else keeps the driver's own wording. The code is not included — callers that show it separately
     /// would otherwise repeat it.
     /// </summary>
-    public static string Describe(CamusException ex) => ex.Code switch
+    /// <param name="ex">The driver's exception.</param>
+    /// <param name="tokenOnly">
+    /// Whether this console refuses user/password sign-in. It changes only the wording, and it has to:
+    /// telling somebody to sign in, on a console with no field to sign in with, sends them looking for
+    /// a password box that does not exist.
+    /// </param>
+    public static string Describe(CamusException ex, bool tokenOnly = false) => ex.Code switch
     {
+        AuthFailedCode when tokenOnly =>
+            "Authentication failed. The access token was missing, rejected, or has expired — open "
+            + "Configure and supply a current one.",
         AuthFailedCode =>
             "Authentication failed. The server rejected the credentials, or has authentication enabled "
             + "and this session sent none — open Configure and sign in.",
@@ -517,6 +542,16 @@ public sealed class CamusSessionService : IAsyncDisposable
         string? token = string.IsNullOrWhiteSpace(accessToken) ? null : accessToken.Trim();
         if (token is not null && token.Contains(';', StringComparison.Ordinal))
             throw new ArgumentException("An access token cannot contain ';'.", nameof(accessToken));
+
+        // The dialog hides the user and password fields under this flag, but the dialog is not the
+        // boundary — this method is. Refusing here is what keeps a password out of the console for
+        // any caller, and turns a stale prefill into a visible error instead of a silent sign-in.
+        if (RequiresAccessToken && (!string.IsNullOrWhiteSpace(user) || !string.IsNullOrEmpty(password)))
+        {
+            throw new InvalidOperationException(
+                "This console accepts an access token only (CamusDB:RequireAccessToken). "
+                + "User and password sign-in is disabled.");
+        }
 
         string newEndpoint = endpoint.Trim();
         string newProtocol = string.IsNullOrWhiteSpace(protocol) ? "rest" : protocol.Trim();

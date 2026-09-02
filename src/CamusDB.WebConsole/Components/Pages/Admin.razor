@@ -16,8 +16,9 @@
         </MudTooltip>
         <h1 class="admin-title">Administration</h1>
         <span class="admin-subtitle">
-            @Session.Endpoint answers for itself — these statements are node-local and never forward to
-            the leader.
+            @* The address is named only where the visitor could change it. See ConnectionFooter. *@
+            @(Session.EndpointLocked ? "This server" : Session.Endpoint) answers for itself — these
+            statements are node-local and never forward to the leader.
         </span>
     </div>
 

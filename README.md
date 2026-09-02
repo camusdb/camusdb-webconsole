@@ -34,6 +34,7 @@ Open [http://localhost:8080](http://localhost:8080).
 | `CamusDB__User` | User to authenticate as (see [Authentication](#authentication)) |
 | `CamusDB__Password` | That user's password |
 | `CamusDB__AccessToken` | A bearer token obtained elsewhere, instead of logging in |
+| `CamusDB__RequireAccessToken` | `true` refuses user/password sign-in — token only (default `false`) |
 
 You can also change these later via **Configure** in the app bar.
 
@@ -67,7 +68,8 @@ On first load the console connects using `appsettings.json`. Use **Configure** i
     "MaxRows": 1000,
     "User": "",
     "Password": "",
-    "AccessToken": ""
+    "AccessToken": "",
+    "RequireAccessToken": false
   }
 }
 ```
@@ -82,6 +84,7 @@ On first load the console connects using `appsettings.json`. Use **Configure** i
 | `User` | User to authenticate as — empty means unauthenticated |
 | `Password` | That user's password |
 | `AccessToken` | A bearer token obtained elsewhere, used verbatim instead of logging in |
+| `RequireAccessToken` | Refuse user/password sign-in; an access token is the only way in (default `false`) |
 | `TokenLifetimeSeconds` | Fallback token reuse window when the server reports no expiry |
 
 ## Authentication
@@ -107,6 +110,25 @@ server rejects one early (a password rotation, a `DROP USER`, a restart).
   the session ends when the server expires it.
 - Configuring `User`/`Password` in `appsettings.json` (or `CamusDB__*` environment variables) signs in
   automatically at startup. Prefer environment variables or a secret store over committing a password.
+
+### Token-only consoles
+
+`CamusDB__RequireAccessToken=true` refuses user/password sign-in. The Configure dialog then offers the
+access token field alone, `CamusSessionService` rejects a user or a password from any caller, and no
+password reaches the console at any point. It is off by default.
+
+Use it where the token is minted by something else — an SSO broker, or the vendor launch below — and
+the console must never be a place a password is typed.
+
+Two things it deliberately does **not** do:
+
+- **It does not require authentication.** Against a server with authentication disabled the console
+  still connects unauthenticated. Whether an identity is required is the server's decision, set with
+  `CAMUSDB_AUTH_ENABLED`.
+- **It does not silently drop configured credentials.** Setting it together with `CamusDB__User` or
+  `CamusDB__Password` fails startup with a message naming both keys.
+
+A supplied token is still never renewed, so plan for the session to end when the server expires it.
 
 Users and grants are managed with ordinary SQL from the query editor, as a superuser:
 
