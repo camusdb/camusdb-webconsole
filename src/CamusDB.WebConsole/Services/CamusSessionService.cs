@@ -75,8 +75,26 @@ public sealed class CamusSessionService : IAsyncDisposable
     private string? _password;
     private string? _accessToken;
 
-    public CamusSessionService(IOptions<CamusDbOptions> options)
+    private readonly EndpointAllowList _allowList;
+    private readonly LoginAttemptThrottle _throttle;
+    private readonly ILogger<CamusSessionService> _logger;
+
+    // The endpoints this deployment was configured with. They stay acceptable whatever the allowlist
+    // says: an operator who wrote an endpoint into configuration has already decided it, and refusing
+    // it here would turn one missing list entry into a console that cannot reach its own server.
+    private readonly string _configuredEndpoint;
+    private readonly string _configuredBackupEndpoint;
+
+    public CamusSessionService(
+        IOptions<CamusDbOptions> options,
+        EndpointAllowList allowList,
+        LoginAttemptThrottle throttle,
+        ILogger<CamusSessionService> logger)
     {
+        _allowList = allowList;
+        _throttle = throttle;
+        _logger = logger;
+
         CamusDbOptions o = options.Value;
         Endpoint = o.Endpoint;
         Database = o.Database;
@@ -88,6 +106,9 @@ public sealed class CamusSessionService : IAsyncDisposable
 
         BackupEndpoint = o.BackupEndpoint.Trim();
         BackupTimeoutSeconds = o.BackupTimeoutSeconds;
+
+        _configuredEndpoint = Endpoint.Trim();
+        _configuredBackupEndpoint = BackupEndpoint;
 
         RequiresAccessToken = o.RequireAccessToken;
 
@@ -144,6 +165,28 @@ public sealed class CamusSessionService : IAsyncDisposable
     /// visitor — so remembered browser preferences must not override it.
     /// </summary>
     public bool IsVendorSession { get; private set; }
+
+    /// <summary>
+    /// Address of the browser this circuit belongs to, used to count failed sign-in attempts across
+    /// circuits. <see cref="LoginAttemptThrottle.UnknownClient"/> until the root component supplies
+    /// it — the request that carries the address is finished before the circuit starts, so the value
+    /// has to be handed down rather than read here.
+    /// </summary>
+    public string ClientKey { get; private set; } = LoginAttemptThrottle.UnknownClient;
+
+    /// <summary>
+    /// Applies the client address for this circuit. Called once, from the root component. Later calls
+    /// are ignored: a circuit belongs to one browser for its whole life, and a second value could only
+    /// come from something trying to trade a counted address for a fresh one.
+    /// </summary>
+    public void SetClientKey(string? clientKey)
+    {
+        if (!string.Equals(ClientKey, LoginAttemptThrottle.UnknownClient, StringComparison.Ordinal))
+            return;
+
+        if (!string.IsNullOrWhiteSpace(clientKey))
+            ClientKey = clientKey.Trim();
+    }
 
     /// <summary>User the console authenticates as, or empty when connecting unauthenticated.</summary>
     public string User { get; private set; }
@@ -285,6 +328,14 @@ public sealed class CamusSessionService : IAsyncDisposable
     {
         await DisconnectAsync().ConfigureAwait(false);
 
+        // Only an attempt that presents a secret is counted. The console autoconnects without
+        // credentials on every page load, and counting that would let an ordinary visitor lock out
+        // the address they share with everyone else behind the same proxy.
+        bool credentialed = HasCredentials;
+
+        if (credentialed)
+            await AwaitLoginThrottleAsync(cancellationToken).ConfigureAwait(false);
+
         try
         {
             _builder = new CamusConnectionStringBuilder(BuildConnectionString());
@@ -302,6 +353,12 @@ public sealed class CamusSessionService : IAsyncDisposable
             _lastError = null;
             RequiresAuthentication = false;
 
+            // Cleared here, not at the end of the method: the ping is the point at which the
+            // credentials are proven. What follows can still fail for reasons that say nothing about
+            // them, and a proven password must not go on paying for earlier wrong ones.
+            if (credentialed)
+                _throttle.RecordSuccess(ClientKey, User);
+
             // Configured DB may not exist (ping still succeeds). Prefer a real database.
             await ResolveExistingDatabaseAsync(cancellationToken).ConfigureAwait(false);
 
@@ -313,6 +370,10 @@ public sealed class CamusSessionService : IAsyncDisposable
             _connected = false;
             _lastError = $"{ex.Code}: {Describe(ex, RequiresAccessToken)}";
             RequiresAuthentication = ex.Code == AuthFailedCode;
+
+            if (credentialed && ex.Code is AuthFailedCode or LoginRateLimitedCode)
+                RecordLoginFailure(ex.Code);
+
             throw new CamusException(ex.Code, Describe(ex, RequiresAccessToken));
         }
         catch (Exception ex)
@@ -327,6 +388,50 @@ public sealed class CamusSessionService : IAsyncDisposable
         {
             NotifyChanged();
         }
+    }
+
+    /// <summary>
+    /// Pays whatever this client owes for its earlier failures before the attempt is made, and
+    /// refuses outright once it has spent its allowance.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The client is inside a lockout.</exception>
+    private async Task AwaitLoginThrottleAsync(CancellationToken cancellationToken)
+    {
+        LoginAttemptThrottle.ThrottleDecision decision = _throttle.Check(ClientKey, User);
+
+        if (!decision.Allowed)
+        {
+            int seconds = Math.Max(1, (int)Math.Ceiling(decision.RetryAfter.TotalSeconds));
+
+            _logger.LogWarning(
+                "Refused a sign-in attempt from {ClientKey} for user '{User}': too many failures. "
+                + "Blocked for another {Seconds}s.",
+                ClientKey, User, seconds);
+
+            _lastError = $"Too many failed sign-in attempts. Try again in {seconds} seconds.";
+            NotifyChanged();
+
+            throw new InvalidOperationException(
+                $"Too many failed sign-in attempts from this address. Try again in {seconds} seconds.");
+        }
+
+        // The wait is served here rather than after the failure so that a caller which abandons the
+        // circuit mid-wait still pays for its next attempt.
+        if (decision.Delay > TimeSpan.Zero)
+            await Task.Delay(decision.Delay, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Counts one failure and writes it to the log. The log line is the only durable record of a
+    /// guessing run — <see cref="LastError"/> lives in one circuit's memory and is gone with it.
+    /// </summary>
+    private void RecordLoginFailure(string code)
+    {
+        _throttle.RecordFailure(ClientKey, User);
+
+        _logger.LogWarning(
+            "Failed CamusDB sign-in from {ClientKey} for user '{User}' at {Endpoint} ({Code}).",
+            ClientKey, string.IsNullOrEmpty(User) ? "(token)" : User, Endpoint, code);
     }
 
     /// <summary>
@@ -568,6 +673,16 @@ public sealed class CamusSessionService : IAsyncDisposable
         if (newEndpoint.Contains(';', StringComparison.Ordinal))
             throw new ArgumentException("Endpoint cannot contain ';'.", nameof(endpoint));
 
+        // The allowlist governs this path too, not only a vendor launch payload. A shape check says
+        // the string is a URL; it does not say the console is willing to open it, and the console —
+        // not the visitor's browser — is what opens it.
+        if (!IsEndpointAllowed(newEndpoint, uri, _configuredEndpoint))
+        {
+            throw new ArgumentException(
+                "That endpoint is not in this console's allowed endpoint list "
+                + "(ConsoleLaunch:AllowedEndpoints).", nameof(endpoint));
+        }
+
         if (newDatabase.Contains(';', StringComparison.Ordinal))
             throw new ArgumentException("A database name cannot contain ';'.", nameof(database));
 
@@ -585,6 +700,13 @@ public sealed class CamusSessionService : IAsyncDisposable
 
             if (newBackupEndpoint.Contains(';', StringComparison.Ordinal))
                 throw new ArgumentException("A backup endpoint cannot contain ';'.", nameof(backupEndpoint));
+
+            if (!IsEndpointAllowed(newBackupEndpoint, backupUri, _configuredBackupEndpoint))
+            {
+                throw new ArgumentException(
+                    "That backup endpoint is not in this console's allowed endpoint list "
+                    + "(ConsoleLaunch:AllowedEndpoints).", nameof(backupEndpoint));
+            }
         }
 
         if (EndpointLocked
@@ -610,6 +732,17 @@ public sealed class CamusSessionService : IAsyncDisposable
 
         await ConnectAsync(cancellationToken).ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// Whether the console may open this URL. The deployment's own configured value always passes;
+    /// anything else has to be on the allowlist, which permits everything while it is empty.
+    /// </summary>
+    /// <param name="raw">The URL as typed, compared against the configured value.</param>
+    /// <param name="parsed">The same URL parsed, which is what the allowlist matches on.</param>
+    /// <param name="configured">The value this deployment was started with, or empty.</param>
+    private bool IsEndpointAllowed(string raw, Uri parsed, string configured) =>
+        (configured.Length > 0 && string.Equals(raw, configured, StringComparison.OrdinalIgnoreCase))
+        || _allowList.IsAllowed(parsed);
 
     /// <summary>
     /// Revokes the session's token server-side, forgets the credentials, and drops the connection.

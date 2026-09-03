@@ -50,15 +50,24 @@ start_console() {
     return 1
 }
 
+# Echoes the raw body of a launch request naming $1.
+launch_body() {
+    curl -sS -X POST "$URL/api/console/sessions" \
+        -H "X-Console-Key: $KEY" -H 'Content-Type: application/json' \
+        -d "{\"brandName\":\"X\",\"endpoint\":\"$1\"}"
+}
+
 # Echoes "ok" when a launch naming $1 is accepted, "blocked" when refused.
+#
+# The refusal wording is deliberately one wording for two different reasons — an endpoint the
+# allowlist does not hold, and an endpoint the deployment pins — so this matches the shared text
+# rather than either reason. "one wording for both refusals" below is what holds that property.
 try_endpoint() {
     local body
-    body=$(curl -sS -X POST "$URL/api/console/sessions" \
-        -H "X-Console-Key: $KEY" -H 'Content-Type: application/json' \
-        -d "{\"brandName\":\"X\",\"endpoint\":\"$1\"}")
+    body=$(launch_body "$1")
     case "$body" in
         *launchUrl*) echo "ok" ;;
-        *"not in this console's allowed endpoint list"*) echo "blocked" ;;
+        *"does not accept that CamusDB endpoint"*) echo "blocked" ;;
         *) echo "other: $body" ;;
     esac
 }
@@ -116,6 +125,61 @@ start_console ConsoleLaunch__Enabled=true || { echo "console did not start"; exi
 [ "$(try_endpoint http://169.254.169.254)" = "ok" ] && check "unset: any endpoint accepted (documented)" 1 || check "unset: any endpoint accepted (documented)" 0
 grep -q "may then name any http" "$HERE/.allowlist.log" \
     && check "unset: startup warns" 1 || check "unset: startup warns" 0
+
+# ---------------------------------------------------------------- refusals must not be told apart
+#
+# A caller that can tell "this console pins its endpoint" from "that host is not on the list" can
+# work through candidate host names and read the answer off the difference. The two refusals
+# therefore share one body, and this is what keeps them sharing it.
+echo
+echo "-- one wording for both refusals --"
+start_console ConsoleLaunch__AllowedEndpoints=https://db.acme.example || { echo "console did not start"; exit 1; }
+off_list=$(launch_body http://169.254.169.254)
+
+start_console CamusDB__LockEndpoint=true CamusDB__Endpoint=http://localhost:5095 \
+    || { echo "console did not start"; exit 1; }
+pinned=$(launch_body http://169.254.169.254)
+
+[ "$off_list" = "$pinned" ] && check "off-list and pinned refusals are byte-identical" 1 \
+    || check "off-list and pinned refusals are byte-identical" 0 "off-list=$off_list pinned=$pinned"
+
+case "$off_list" in
+    *AllowedEndpoints*|*LockEndpoint*)
+        check "the refusal names neither control" 0 "$off_list" ;;
+    *) check "the refusal names neither control" 1 ;;
+esac
+
+# ---------------------------------------------------------------- the oracle has to be counted
+#
+# Identical wording still leaves accepted and refused apart, which is unavoidable while the endpoint
+# is a real field. What is avoidable is letting a caller try it without limit.
+echo
+echo "-- launch requests are rate limited --"
+start_console ConsoleLaunch__AllowedEndpoints=https://db.acme.example \
+    Security__LaunchPermitLimit=4 Security__LaunchWindowSeconds=60 \
+    || { echo "console did not start"; exit 1; }
+
+limited=0
+retry_after=""
+for _ in $(seq 1 8); do
+    read -r code retry_after <<< "$(curl -sS -o /dev/null \
+        -w '%{http_code} %header{retry-after}' \
+        -X POST "$URL/api/console/sessions" \
+        -H "X-Console-Key: $KEY" -H 'Content-Type: application/json' \
+        -d '{"brandName":"X"}')"
+    [ "$code" = "429" ] && { limited=1; break; }
+done
+
+[ "$limited" = "1" ] && check "leg 1 answers 429 past the permit limit" 1 \
+    || check "leg 1 answers 429 past the permit limit" 0 "8 requests, none refused"
+[ -n "$retry_after" ] && check "the 429 carries Retry-After" 1 \
+    || check "the 429 carries Retry-After" 0 "no Retry-After header"
+
+# Leg 2 keeps its own allowance: the two legs are called by different parties, and the vendor's
+# backend must not be able to spend the visitor's.
+code=$(curl -sS -o /dev/null -w '%{http_code}' "$URL/console/launch?code=bogus")
+[ "$code" = "400" ] && check "leg 2 keeps its own allowance" 1 \
+    || check "leg 2 keeps its own allowance" 0 "expected 400 from an unspent leg 2, got $code"
 
 echo
 [ "$failures" -eq 0 ] && echo "ALL PASS" || echo "$failures FAILURE(S)"

@@ -19,8 +19,16 @@
     [Parameter]
     public string? LaunchHandoff { get; set; }
 
+    /// <summary>Caller's address, resolved by the static render — see the note in App.razor.</summary>
+    [Parameter]
+    public string? ClientKey { get; set; }
+
     protected override void OnInitialized()
     {
+        // Applied in both renders. The circuit is the one that counts sign-in attempts, and it has no
+        // other way to learn the address.
+        Session.SetClientKey(ClientKey);
+
         // Both renders need the name: the static pass and the circuit have separate DI scopes, so
         // each gets its own ConsoleBranding and neither can see the other's.
         Branding.Apply(BrandName);

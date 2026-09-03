@@ -64,6 +64,10 @@ wrong key to a correctly-configured console.
   page load is the design, and this is what would catch it regressing to one per session.
 - **Clearing the cookie** reverts the console to its default name, confirming the session really is
   the cookie and nothing has been cached client-side.
+- The **Configure dialog** obeys the endpoint allowlist. This is the wider of the two endpoint
+  paths — leg 1 needs the vendor key, the dialog needs only a browser — and it is checked here
+  rather than in `verify-allowlist.sh` because the dialog lives in the circuit, so only a browser
+  can reach it. An off-list host is refused; the listed one is still accepted.
 
 `verify-allowlist.sh` — the SSRF guard. A shell script rather than a third Playwright suite because
 the allowlist is *startup* configuration: each case needs its own console process, and no browser is
@@ -79,7 +83,13 @@ configuration binder maps a scalar to `string[]` by producing nothing. The guard
   (`db.acme.example.evil.com`) does not;
 - a malformed entry **refuses to start** and names the offending entry;
 - with no list configured, any endpoint is accepted and startup warns — the documented default,
-  asserted so it cannot change silently.
+  asserted so it cannot change silently;
+- the two refusals — "not on the list" and "this console is pinned" — return **byte-identical**
+  bodies naming neither control. Told apart, they are an oracle: a caller could work through
+  candidate host names and read the answer off the difference;
+- leg 1 answers **429** with `Retry-After` past its permit limit, and leg 2 has an allowance of its
+  own. Identical wording still leaves accepted and refused apart, which cannot be helped while the
+  endpoint is a real field — what can be helped is letting a caller try it without limit.
 
 ## The stand-in CamusDB
 
@@ -113,5 +123,9 @@ not a real credential and the stand-in server accepts anything.
   early version of `verify-circuit.js` fetched `launchUrl` to capture the prerendered HTML, spent
   the code, and handed the browser an expired link. The prerendered HTML is now read from the
   browser's own document response instead.
+- The Configure-dialog check reloads the page if the dialog does not open. A cold cache can cost the
+  page its circuit: the Monaco editor script sometimes arrives after the circuit has already tried
+  to use it, which terminates the circuit and leaves buttons that do nothing. That is a fault of the
+  console, not of the guard under test, so the check retries rather than reporting a missing guard.
 - Everything the run writes is dot-prefixed (`.camus-requests.log`, `.console.log`, `.camus.log`)
   and git-ignored, along with `node_modules/` and `branded-console.png`.

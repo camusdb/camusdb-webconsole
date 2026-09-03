@@ -35,11 +35,19 @@ public static class ConsoleLaunchEndpoints
 
     private const string ApiKeyHeader = "X-Console-Key";
 
+    /// <summary>
+    /// Rate-limit policy both launch paths sit behind. Neither is reachable without a secret, but
+    /// both answer differently depending on the secret they are given, so both are countable oracles
+    /// unless the counting is capped somewhere.
+    /// </summary>
+    public const string RateLimitPolicy = "console-launch";
+
     public static string CookieName(bool secure) => secure ? SessionCookieName : InsecureSessionCookieName;
 
     public static void MapConsoleLaunch(this WebApplication app)
     {
         ConsoleLaunchOptions options = app.Services.GetRequiredService<IOptions<ConsoleLaunchOptions>>().Value;
+        ConsoleSecurityOptions security = app.Services.GetRequiredService<IOptions<ConsoleSecurityOptions>>().Value;
 
         // Nothing is routed when the feature is off, so both paths answer exactly as any other
         // unmatched URL does (404 on the GET, 400 from the antiforgery middleware on the POST). A
@@ -47,10 +55,16 @@ public static class ConsoleLaunchEndpoints
         if (!options.Enabled)
             return;
 
-        app.MapPost("/api/console/sessions", CreateSessionAsync)
+        RouteHandlerBuilder create = app.MapPost("/api/console/sessions", CreateSessionAsync)
             .DisableAntiforgery();   // server-to-server with a bearer-style key; no browser, no cookie, no CSRF
 
-        app.MapGet("/console/launch", Launch);
+        RouteHandlerBuilder launch = app.MapGet("/console/launch", Launch);
+
+        if (!security.RateLimitEnabled)
+            return;
+
+        create.RequireRateLimiting(RateLimitPolicy);
+        launch.RequireRateLimiting(RateLimitPolicy);
     }
 
     private static async Task<IResult> CreateSessionAsync(
@@ -95,7 +109,7 @@ public static class ConsoleLaunchEndpoints
         if (!TryReadDatabase(request.Database, out string? database, out string? databaseError))
             return Problem(databaseError!);
 
-        if (!TryReadEndpoint(request.Endpoint, allowList, camus, out string? endpoint, out string? endpointError))
+        if (!TryReadEndpoint(request.Endpoint, allowList, camus, logger, out string? endpoint, out string? endpointError))
             return Problem(endpointError!);
 
         if (!TryReadProtocol(request.Protocol, out string? protocol, out string? protocolError))
@@ -263,6 +277,7 @@ public static class ConsoleLaunchEndpoints
         string? raw,
         EndpointAllowList allowList,
         CamusDbOptions camus,
+        ILogger logger,
         out string? endpoint,
         out string? error)
     {
@@ -274,16 +289,8 @@ public static class ConsoleLaunchEndpoints
 
         string trimmed = raw.Trim();
 
-        // LockEndpoint is the deployment's flat refusal to be repointed, and it outranks a vendor.
-        // Refusing here rather than silently ignoring the field means a vendor that expected its
-        // endpoint to take effect finds out at integration time instead of wondering later why every
-        // session lands on the wrong server.
-        if (camus.LockEndpoint && !string.Equals(trimmed, camus.Endpoint.Trim(), StringComparison.OrdinalIgnoreCase))
-        {
-            error = "This console pins its CamusDB endpoint (CamusDB:LockEndpoint); a launch may not change it.";
-            return false;
-        }
-
+        // The shape check comes first because it describes the caller's own input and reveals nothing
+        // about this console. The two policy checks below are the opposite, so they share one wording.
         if (trimmed.Contains(';', StringComparison.Ordinal)
             || !Uri.TryCreate(trimmed, UriKind.Absolute, out Uri? uri)
             || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
@@ -292,14 +299,30 @@ public static class ConsoleLaunchEndpoints
             return false;
         }
 
-        if (!allowList.IsAllowed(uri))
+        // LockEndpoint is the deployment's flat refusal to be repointed, and it outranks a vendor.
+        bool locked = camus.LockEndpoint
+            && !string.Equals(trimmed, camus.Endpoint.Trim(), StringComparison.OrdinalIgnoreCase);
+
+        bool offList = !locked && !allowList.IsAllowed(uri);
+
+        if (!locked && !offList)
         {
-            error = "That endpoint is not in this console's allowed endpoint list.";
-            return false;
+            endpoint = trimmed;
+            return true;
         }
 
-        endpoint = trimmed;
-        return true;
+        // One wording for both refusals. Told apart, they are an oracle: "pinned" says this console
+        // accepts no endpoint at all, while "not on the list" says the caller may keep guessing and
+        // will know a right answer when it sees one. The reason still reaches the operator, in the
+        // log, where a caller working through candidate hosts is visible as a run of these lines.
+        logger.LogWarning(
+            "Refused the launch endpoint '{Endpoint}': {Reason}.",
+            trimmed, locked ? "CamusDB:LockEndpoint pins the endpoint" : "not in ConsoleLaunch:AllowedEndpoints");
+
+        error = "This console does not accept that CamusDB endpoint. It pins its endpoint, or "
+            + "restricts which endpoints a launch may name; ask the console's operator which applies.";
+
+        return false;
     }
 
     private static bool TryReadProtocol(string? raw, out string? protocol, out string? error)

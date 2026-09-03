@@ -86,6 +86,63 @@ On first load the console connects using `appsettings.json`. Use **Configure** i
 | `AccessToken` | A bearer token obtained elsewhere, used verbatim instead of logging in |
 | `RequireAccessToken` | Refuse user/password sign-in; an access token is the only way in (default `false`) |
 | `TokenLifetimeSeconds` | Fallback token reuse window when the server reports no expiry |
+| `LockEndpoint` | Refuse every endpoint change: the Configure dialog cannot repoint the console, and a launch payload cannot either (default `false`) |
+
+### Security controls
+
+Two throttles, both on by default, and both configured under a `Security` section:
+
+```json
+{
+  "Security": {
+    "LoginThrottleEnabled": true,
+    "LoginFreeAttempts": 3,
+    "LoginMaxAttempts": 10,
+    "LoginSprayMultiplier": 5,
+    "LoginWindowSeconds": 300,
+    "LoginLockoutSeconds": 300,
+    "LoginMaxDelaySeconds": 8,
+    "MaxTrackedClients": 20000,
+    "RateLimitEnabled": true,
+    "LaunchPermitLimit": 30,
+    "LaunchWindowSeconds": 60
+  }
+}
+```
+
+| Key | Description |
+| --- | --- |
+| `LoginThrottleEnabled` | Count and slow failed sign-ins from the Configure dialog |
+| `LoginFreeAttempts` | Failures that cost nothing, so a mistyped password is not punished |
+| `LoginMaxAttempts` | Failures for one address and one user name before the console refuses to try |
+| `LoginSprayMultiplier` | Multiplies the above to give one address's ceiling across every user name |
+| `LoginWindowSeconds` | How long failures are remembered |
+| `LoginLockoutSeconds` | How long a refusal lasts |
+| `LoginMaxDelaySeconds` | Ceiling on the wait added before an attempt |
+| `MaxTrackedClients` | Ceiling on tracked addresses; the entry nearest expiry is dropped to make room |
+| `RateLimitEnabled` | Rate-limit the two vendor launch endpoints per address |
+| `LaunchPermitLimit` | Requests one address may make to each launch endpoint per window |
+| `LaunchWindowSeconds` | Length of that window |
+
+**The sign-in throttle.** CamusDB applies its own login limit, but that limit is per account. A
+caller that tries one password against a thousand account names never reaches it. This throttle
+counts every failure twice — once for the pair (address, user name), once for the address alone — so
+both shapes are covered. The first few failures cost nothing; then a wait is added, doubling per
+failure; past `LoginMaxAttempts` the console refuses to attempt at all. Every failure is written to
+the log, which is the only durable record a guessing run leaves.
+
+**The client address.** Both throttles key on the socket peer address. The console does **not** read
+`X-Forwarded-For`, because a header the caller writes is a key the caller chooses, and a chosen key
+defeats the counting. Behind a reverse proxy every visitor therefore shares one key: wire up
+[forwarded headers](https://learn.microsoft.com/aspnet/core/host-and-deploy/proxy-load-balancer)
+with known proxies, or raise the limits, or turn the sign-in throttle off and rely on the server.
+
+**The endpoint allowlist governs both paths.** `ConsoleLaunch:AllowedEndpoints` — described under
+[the host allowlist](#the-host-allowlist) — is applied to the Configure dialog as well as to a
+vendor launch payload. The dialog is the wider of the two: leg 1 needs the vendor key, while the
+dialog is open to whoever can load the page. The endpoint written in `CamusDB:Endpoint` always
+passes, whatever the list holds, so one missing entry cannot leave the console unable to reach its
+own server.
 
 ## Authentication
 
@@ -238,13 +295,19 @@ name that skipped the gate.
 
 A launch payload may repoint the session at another CamusDB server. **The console's own process
 opens that URL**, so a payload can reach hosts the visitor cannot — cloud metadata services,
-internal admin ports. Two controls exist and you should set one:
+internal admin ports. The Configure dialog is the same surface and is open to any visitor. Two
+controls exist and you should set one:
 
-- `CamusDB:LockEndpoint=true` — refuses any override outright; a payload naming a different
-  endpoint is rejected with 400.
-- `ConsoleLaunch:AllowedEndpoints` — the host allowlist, below.
+- `CamusDB:LockEndpoint=true` — refuses any override outright, from a payload or from the dialog.
+- `ConsoleLaunch:AllowedEndpoints` — the host allowlist, below. It governs both paths.
 
 With neither set, any `http(s)` URL is accepted and the app logs a warning at startup.
+
+A refused payload is told only that the endpoint is not accepted. It is not told which control
+refused it, and the two refusals are byte-identical: told apart, "this console is pinned" and "that
+host is not on the list" let a caller work through candidate host names and read the answer off the
+difference. The reason is written to the log instead, where a run of refusals is visible to an
+operator. Rate limiting (`Security:RateLimitEnabled`) caps how fast that guessing can proceed.
 
 #### The host allowlist
 

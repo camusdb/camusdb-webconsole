@@ -22,7 +22,7 @@
 </head>
 
 <body>
-    <Routes @rendermode="InteractiveServer" BrandName="@_brandName" LaunchHandoff="@_launchHandoff" />
+    <Routes @rendermode="InteractiveServer" BrandName="@_brandName" LaunchHandoff="@_launchHandoff" ClientKey="@_clientKey" />
     <ReconnectModal />
     <script src="_content/BlazorMonaco/jsInterop.js"></script>
     <script src="_content/BlazorMonaco/lib/monaco-editor/min/vs/loader.js"></script>
@@ -59,9 +59,25 @@
 
     private string? _launchHandoff;
 
+    /// <summary>
+    /// Caller's address, read from the request because the circuit cannot see it: HttpContext is gone
+    /// by the time the circuit starts, and SignalR does not carry it forward. It is what makes the
+    /// failed sign-in counter survive a page reload, so it has to come from here.
+    ///
+    /// <para>It travels as a component parameter, which for an InteractiveServer component is
+    /// encrypted by data protection before it reaches the page — a visitor can neither read it nor
+    /// exchange it for an address of their choosing.</para>
+    /// </summary>
+    private string? _clientKey;
+
     protected override void OnInitialized()
     {
-        if (HttpContext is null || !LaunchOptions.Value.Enabled)
+        if (HttpContext is null)
+            return;
+
+        _clientKey = ClientAddress.Key(HttpContext);
+
+        if (!LaunchOptions.Value.Enabled)
             return;
 
         bool secure = HttpContext.Request.IsHttps || LaunchOptions.Value.RequireHttps;

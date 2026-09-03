@@ -53,11 +53,20 @@ public sealed class ConsoleLaunchOptions
     public int MaxLiveEntries { get; set; } = 2_000;
 
     /// <summary>
-    /// When non-empty, a launch payload may only name a CamusDB endpoint matching one of these.
+    /// When non-empty, an endpoint change may only name a CamusDB endpoint matching one of these.
     /// Leave it empty to accept any absolute http/https URL.
     ///
+    /// <para>It governs <b>both</b> paths that can repoint the console: a vendor launch payload, and
+    /// the Configure dialog. The dialog is the wider of the two — a launch needs the vendor key,
+    /// while the dialog is open to whoever can load the page. The key still lives in this section
+    /// because that is where it was introduced and where deployments already set it.</para>
+    ///
+    /// <para>The endpoint in <c>CamusDB:Endpoint</c> always passes, whatever this list holds. An
+    /// operator who wrote it into configuration has already decided it, and refusing it here would
+    /// turn one missing entry into a console that cannot reach its own server.</para>
+    ///
     /// <para><b>Leaving it empty is a server-side request forgery surface</b>: the console's own
-    /// process opens the URL, so a payload can reach hosts the visitor cannot — link-local metadata
+    /// process opens the URL, so a caller can reach hosts the visitor cannot — link-local metadata
     /// services, internal admin ports. Set this, or set <c>CamusDB:LockEndpoint</c>, on any console
     /// reachable beyond localhost.</para>
     ///

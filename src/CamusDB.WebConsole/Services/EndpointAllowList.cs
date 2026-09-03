@@ -3,11 +3,11 @@ using System.Globalization;
 namespace CamusDB.WebConsole.Services;
 
 /// <summary>
-/// The hosts a vendor launch payload may point the console at.
+/// The hosts the console may be pointed at — by a vendor launch payload, or by the Configure dialog.
 ///
 /// <para>This is the control that closes the request-forgery surface described on
 /// <see cref="Options.ConsoleLaunchOptions.AllowedEndpoints"/>: the console's own process opens the
-/// endpoint a payload names, so without a list it can be made to reach cloud metadata services and
+/// endpoint it is given, so without a list it can be made to reach cloud metadata services and
 /// internal admin ports the visitor could never reach directly.</para>
 ///
 /// <para>Entries are written as a full origin (<c>https://db.acme.example</c>), or as a bare host

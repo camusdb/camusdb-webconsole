@@ -6,7 +6,7 @@
 // launched assertions would be measuring nothing.
 const { chromium } = require('playwright');
 const {
-    CONSOLE_URL, TOKEN, BRAND, DATABASE, DEFAULT_BRAND,
+    CONSOLE_URL, FAKE_CAMUS, TOKEN, BRAND, DATABASE, DEFAULT_BRAND,
     camusRequests, requestLaunchUrl, createReporter, runSuite,
 } = require('./config');
 
@@ -114,6 +114,66 @@ runSuite(async () => {
         const afterClear = await page.locator('.app-bar-title').first().innerText().catch(() => '(missing)');
         check('cookie removed: console reverts to the default name',
             afterClear.trim() === DEFAULT_BRAND, `got ${JSON.stringify(afterClear)}`);
+
+        await context.close();
+    }
+
+    // ---- The allowlist governs the Configure dialog, not only a launch payload ----
+    //
+    // This is the wider of the two endpoint paths: leg 1 needs the vendor key, while the dialog is
+    // open to whoever can load the page. The console's own process opens whatever it is given, so an
+    // unguarded dialog reaches hosts the visitor cannot — which is what this asserts it does not.
+    {
+        const context = await browser.newContext();
+        const page = await context.newPage();
+
+        // Opening the dialog needs a live circuit, and a cold cache can cost this page one: the
+        // Monaco editor script sometimes arrives after the circuit has already tried to use it,
+        // which terminates the circuit and leaves a page whose buttons do nothing. A reload finds
+        // the script cached. That is a fault of the console, not of the guard under test, so it is
+        // retried here rather than allowed to report as a missing guard.
+        const dialog = page.locator('.mud-dialog').last();
+        let opened = false;
+
+        for (let attempt = 0; attempt < 4 && !opened; attempt++) {
+            await page.goto(CONSOLE_URL, { waitUntil: 'domcontentloaded' });
+            await page.waitForTimeout(2500);
+            await page.locator('.configure-btn').click({ timeout: 10000 }).catch(() => {});
+
+            opened = await dialog.waitFor({ state: 'visible', timeout: 6000 })
+                .then(() => true).catch(() => false);
+        }
+
+        check('configure: the dialog opens', opened);
+
+        if (!opened) {
+            await context.close();
+            await browser.close();
+            finish();
+            return;
+        }
+
+        const endpoint = dialog.getByLabel('Endpoint', { exact: true });
+        const connect = dialog.locator('.run-btn');
+
+        const attempt = async (value) => {
+            await endpoint.fill(value);
+            await connect.click();
+            await page.waitForTimeout(2500);
+
+            return dialog.locator('.mud-alert-message').first()
+                .innerText().catch(() => '');
+        };
+
+        const refused = await attempt('http://169.254.169.254');
+
+        check('configure: an off-list endpoint is refused',
+            /allowed endpoint list/i.test(refused), `alert was ${JSON.stringify(refused)}`);
+
+        const allowed = await attempt(FAKE_CAMUS);
+
+        check('configure: a listed endpoint is still accepted',
+            !/allowed endpoint list/i.test(allowed), `alert was ${JSON.stringify(allowed)}`);
 
         await context.close();
     }

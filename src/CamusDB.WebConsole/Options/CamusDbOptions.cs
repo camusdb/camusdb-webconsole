@@ -52,10 +52,14 @@ public sealed class CamusDbOptions
     public bool RequireAccessToken { get; set; }
 
     /// <summary>
-    /// When true, the Configure dialog cannot repoint the console at a different server: endpoint and
-    /// protocol stay fixed to the configured values. Enable this (CamusDB__LockEndpoint=true) whenever
-    /// the console is reachable beyond localhost, so a visitor cannot use the server as a proxy to
-    /// probe internal hosts it can reach but they cannot.
+    /// When true, nothing can repoint the console at a different server: endpoint and protocol stay
+    /// fixed to the configured values, for the Configure dialog and for a vendor launch payload
+    /// alike. Enable this (CamusDB__LockEndpoint=true) whenever the console is reachable beyond
+    /// localhost, so a visitor cannot use the server as a proxy to probe internal hosts it can reach
+    /// but they cannot.
+    ///
+    /// <para>It is the stricter of the two controls. <see cref="ConsoleLaunchOptions.AllowedEndpoints"/>
+    /// is the other, and permits a named set rather than nothing at all.</para>
     /// </summary>
     public bool LockEndpoint { get; set; }
 
