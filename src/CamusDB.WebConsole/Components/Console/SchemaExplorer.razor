@@ -98,7 +98,7 @@
                             {
                                 <div class="schema-node mud-text-secondary">Loading…</div>
                             }
-                            else if (db.Tables.Count == 0)
+                            else if (db.Tables.Count == 0 && db.Sequences.Count == 0)
                             {
                                 <div class="schema-node mud-text-secondary">(no tables)</div>
                             }
@@ -195,6 +195,39 @@
                                         </div>
                                     }
                                 }
+
+                                @foreach (SequenceSchemaInfo seq in VisibleSequences(db))
+                                {
+                                    <MudMenu ActivationEvent="MudBlazor.MouseEvent.RightClick"
+                                             PositionAtCursor="true"
+                                             Dense="true"
+                                             Class="schema-context-menu-host">
+                                        <ActivatorContent>
+                                            <div class="schema-node"
+                                                 @ondblclick="() => ShowCreateSequenceAsync(seq)"
+                                                 @ondblclick:stopPropagation="true"
+                                                 @oncontextmenu="context.ToggleAsync"
+                                                 @oncontextmenu:preventDefault="true"
+                                                 title="@SequenceTitle(seq)">
+                                                <span style="width:20px;display:inline-block;"></span>
+                                                <MudIcon Icon="@Icons.Material.Filled.FormatListNumbered" Size="Size.Small" />
+                                                <span class="schema-node-label">@seq.Name</span>
+                                                <span class="schema-node-detail">@(seq.OwnedBy ?? "sequence")</span>
+                                            </div>
+                                        </ActivatorContent>
+                                        <ChildContent>
+                                            <MudMenuItem Icon="@Icons.Material.Filled.Code"
+                                                         OnClick="() => ShowCreateSequenceAsync(seq)">
+                                                Show Create Sequence
+                                            </MudMenuItem>
+                                            <MudMenuItem Icon="@Icons.Material.Filled.Delete"
+                                                         IconColor="Color.Error"
+                                                         OnClick="() => DropSequenceAsync(db, seq)">
+                                                Drop Sequence
+                                            </MudMenuItem>
+                                        </ChildContent>
+                                    </MudMenu>
+                                }
                             }
                         </div>
                     }
@@ -248,7 +281,8 @@
             ? _databases
             : _databases.Where(db =>
                 db.Name.Contains(_filter, StringComparison.OrdinalIgnoreCase)
-                || db.Tables.Any(t => t.Name.Contains(_filter, StringComparison.OrdinalIgnoreCase)));
+                || db.Tables.Any(t => t.Name.Contains(_filter, StringComparison.OrdinalIgnoreCase))
+                || db.Sequences.Any(s => s.Name.Contains(_filter, StringComparison.OrdinalIgnoreCase)));
 
     protected override void OnInitialized()
     {
@@ -408,6 +442,7 @@
             db.Tables = tables
                 .Select(t => new TableEntry { Name = t })
                 .ToList();
+            db.Sequences = await LoadSequencesAsync();
             db.Loaded = true;
         }
         catch (Exception ex)
@@ -445,6 +480,22 @@
         }
     }
 
+    /// <summary>
+    /// Sequences are secondary to the table list: a server older than SHOW SEQUENCES, or a user
+    /// without the privilege to list them, still gets the tables.
+    /// </summary>
+    private async Task<List<SequenceSchemaInfo>> LoadSequencesAsync()
+    {
+        try
+        {
+            return (await Schema.ListSequencesAsync()).ToList();
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
     private bool IsActiveDatabase(DbEntry db) =>
         string.Equals(db.Name, Session.Database, StringComparison.OrdinalIgnoreCase);
 
@@ -455,6 +506,32 @@
 
         return db.Tables.Where(t => t.Name.Contains(_filter, StringComparison.OrdinalIgnoreCase));
     }
+
+    private IEnumerable<SequenceSchemaInfo> VisibleSequences(DbEntry db)
+    {
+        if (string.IsNullOrWhiteSpace(_filter))
+            return db.Sequences;
+
+        return db.Sequences.Where(s => s.Name.Contains(_filter, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string SequenceTitle(SequenceSchemaInfo seq)
+    {
+        System.Text.StringBuilder sb = new();
+        sb.Append(seq.Name).Append(" — start ").Append(seq.StartValue ?? "?")
+            .Append(", increment ").Append(seq.Increment ?? "?")
+            .Append(", min ").Append(seq.MinValue ?? "?")
+            .Append(", max ").Append(seq.MaxValue ?? "none")
+            .Append(", cache ").Append(seq.Cache ?? "?");
+        if (!string.IsNullOrEmpty(seq.OwnedBy))
+            sb.Append(", owned by ").Append(seq.OwnedBy);
+        if (!string.IsNullOrEmpty(seq.Comment))
+            sb.Append('\n').Append(seq.Comment);
+        return sb.ToString();
+    }
+
+    private Task ShowCreateSequenceAsync(SequenceSchemaInfo seq) =>
+        OnInsertSql.InvokeAsync(SqlBuilder.BuildShowCreateSequence(seq.Name));
 
     private Task InsertSelectAsync(string table) =>
         OnInsertSql.InvokeAsync($"SELECT * FROM {table}\nLIMIT 100");
@@ -586,6 +663,38 @@
         }
     }
 
+    private async Task DropSequenceAsync(DbEntry db, SequenceSchemaInfo seq)
+    {
+        string warning = string.IsNullOrEmpty(seq.OwnedBy)
+            ? " A column DEFAULT that draws from it stops working."
+            : $" It is owned by {seq.OwnedBy}.";
+
+        bool ok = await ConfirmAsync(
+            "Drop sequence",
+            $"Drop sequence '{seq.Name}' in database '{db.Name}'?{warning} This cannot be undone.",
+            "Drop Sequence");
+        if (!ok)
+            return;
+
+        try
+        {
+            await Session.ChangeDatabaseAsync(db.Name, notify: true);
+            QueryResultModel result = await Queries.ExecuteAsync(SqlBuilder.BuildDropSequence(seq.Name));
+            if (!result.Success)
+            {
+                Snackbar.Add(result.ErrorMessage ?? "Drop sequence failed.", Severity.Error);
+                return;
+            }
+
+            Snackbar.Add($"Sequence '{seq.Name}' dropped.", Severity.Success);
+            await ReloadDatabaseTablesAsync(db);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
     private async Task ExportTableAsync(DbEntry db, TableEntry table)
     {
         try
@@ -701,6 +810,7 @@
         public bool Loaded { get; set; }
         public bool Loading { get; set; }
         public List<TableEntry> Tables { get; set; } = [];
+        public List<SequenceSchemaInfo> Sequences { get; set; } = [];
     }
 
     private sealed class TableEntry

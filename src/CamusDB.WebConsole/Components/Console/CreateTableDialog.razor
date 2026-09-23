@@ -132,6 +132,9 @@
             .Select(f => $"{f.Key}()")
             .ToList();
 
+        if (SqlBuilder.TryBuildDefaultExpression("nextval('seq')", type, out _, out _))
+            usable.Add("nextval('seq')");
+
         return usable.Count == 0 ? "" : string.Join(", ", usable);
     }
 

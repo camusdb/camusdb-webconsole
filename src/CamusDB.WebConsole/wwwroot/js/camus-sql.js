@@ -7,13 +7,20 @@
  * (CamusDB.Core/SQLParser/SQLParser.Language.analyzer.lex) and scalar-function registry, so the
  * editor colors exactly what the engine parses — no more and no less.
  *
- * Deliberately absent: UNION, ALL, LEFT/RIGHT/OUTER/CROSS JOIN. CamusDB has no tokens for them, and
- * `all` is explicitly kept unreserved so it stays usable as a column name.
+ * Deliberately absent: UNION, LEFT/RIGHT/OUTER/CROSS JOIN. CamusDB has no tokens for them.
+ *
+ * ANY, SOME and ALL are not keywords either. The engine parses a quantified comparison
+ * (`x = ANY (SELECT ...)`) as a call to a function of that name, so they are colored as operators
+ * only when a '(' follows. A bare `all` stays a column name.
  *
  * Also absent, and for the same reason: STATISTICS (in SHOW STATISTICS) and the view modifiers
  * REPLACE, CASCADE, RESTRICT, CASCADED, LOCAL, OPTION, OWNER, CONCURRENTLY. The lexer has no token
  * for any of them. Each arrives as a plain identifier and the parse action checks it, so each stays
  * usable as a table or column name. Do not promote one to a keyword here.
+ *
+ * The sequence statements follow the same rule. SEQUENCE and SEQUENCES are the only new tokens.
+ * INCREMENT, MINVALUE, MAXVALUE, NO, CYCLE, CACHE, RESTART, OWNED, IDENTITY, GENERATED, ALWAYS,
+ * SERIAL and CONTINUE are plain identifiers that the parse action checks.
  *
  * Registered as its own language id rather than by overriding "sql": Monaco loads a basic language's
  * tokenizer lazily, on first use, so replacing the "sql" provider at page load races with that import
@@ -51,10 +58,11 @@
             'INDEX', 'INDEXES', 'INNER', 'INSERT', 'INTO', 'JOIN',
             'KEY', 'LIMIT', 'MATERIALIZED', 'NULL', 'OFFSET', 'ON',
             'ORDER', 'ORPHAN', 'PRIMARY', 'PRIVILEGES', 'REFRESH', 'RELINK',
-            'RENAME', 'RESET', 'REVOKE', 'ROLLBACK', 'SELECT', 'SET',
-            'SHOW', 'START', 'TABLE', 'TABLES', 'THEN', 'TO',
-            'TRANSACTION', 'TRUE', 'TRUNCATE', 'UNIQUE', 'UPDATE', 'USER',
-            'VALUES', 'VIEW', 'VIEWS', 'WHEN', 'WHERE', 'WITH',
+            'RENAME', 'RESET', 'REVOKE', 'ROLLBACK', 'SELECT', 'SEQUENCE',
+            'SEQUENCES', 'SET', 'SHOW', 'START', 'TABLE', 'TABLES',
+            'THEN', 'TO', 'TRANSACTION', 'TRUE', 'TRUNCATE', 'UNIQUE',
+            'UPDATE', 'USER', 'VALUES', 'VIEW', 'VIEWS', 'WHEN',
+            'WHERE', 'WITH', 'WITHOUT',
         ],
 
         operators: [
@@ -77,23 +85,32 @@
         // COSINE_DISTANCE, INNER_PRODUCT, L2_DISTANCE, OCTET_LENGTH and VECTOR_DIMS come from
         // VectorScalarFunctions. They measure a vector held in a BYTES column.
         //
+        // CARDINALITY, ARRAY_LENGTH and ARRAY_CONTAINS come from ArrayScalarFunctions, MD5 and the
+        // SHA functions from HashScalarFunctions, and NEXTVAL, CURRVAL, LASTVAL and SETVAL from
+        // SequenceScalarFunctions.
+        //
         // GROUP_CONCAT, STRING_AGG and ARRAY_AGG are absent on purpose. The engine names them only to
         // reject them inside a CHECK constraint. No aggregator implements them.
         builtinFunctions: [
-            'ABS', 'AVG', 'CEIL', 'CEILING', 'COALESCE', 'CONCAT',
-            'CONTAINS', 'COSINE_DISTANCE', 'COUNT', 'COUNT_DISTINCT', 'CURRENT_DATABASE', 'CURRENT_DATE',
-            'CURRENT_ROLE', 'CURRENT_TIMESTAMP', 'CURRENT_USER', 'DATE_ADD', 'DATE_DIFF', 'DATE_PART',
-            'DATE_TRUNC', 'ENDS_WITH', 'FLOOR', 'FROM_UNIXTIME', 'GEN_ID', 'GEN_UUID_V4',
-            'GEN_UUID_V7', 'IFNULL', 'INNER_PRODUCT', 'IS_SUPERUSER', 'JSON_ARRAY_LENGTH', 'JSON_CONTAINS',
-            'JSON_EXTRACT', 'JSON_TYPE', 'JSON_VALID', 'JSON_VALUE', 'L2_DISTANCE', 'LENGTH',
-            'LOWER', 'LTRIM', 'MAX', 'MIN', 'MOD', 'NOW',
-            'NVL', 'OCTET_LENGTH', 'POW', 'POWER', 'RANDOM', 'REGEXP_COUNT',
-            'REGEXP_INSTR', 'REGEXP_LIKE', 'REGEXP_MATCH', 'REGEXP_MATCHES', 'REGEXP_REPLACE', 'REGEXP_SPLIT_TO_ARRAY',
-            'REGEXP_SPLIT_TO_TABLE', 'REGEXP_SUBSTR', 'REPLACE', 'ROUND', 'RTRIM', 'SIGN',
-            'SQRT', 'STARTS_WITH', 'STR_ID', 'SUBSTRING', 'SUM', 'TO_BOOL',
-            'TO_BYTES', 'TO_DATE', 'TO_DATETIME', 'TO_FLOAT32', 'TO_FLOAT64', 'TO_ID',
-            'TO_INT64', 'TO_STRING', 'TRIM', 'UNIX_TIMESTAMP', 'UPPER', 'VECTOR_DIMS',
+            'ABS', 'ARRAY_CONTAINS', 'ARRAY_LENGTH', 'AVG', 'CARDINALITY', 'CEIL',
+            'CEILING', 'COALESCE', 'CONCAT', 'CONTAINS', 'COSINE_DISTANCE', 'COUNT',
+            'COUNT_DISTINCT', 'CURRENT_DATABASE', 'CURRENT_DATE', 'CURRENT_ROLE', 'CURRENT_TIMESTAMP', 'CURRENT_USER',
+            'CURRVAL', 'DATE_ADD', 'DATE_DIFF', 'DATE_PART', 'DATE_TRUNC', 'ENDS_WITH',
+            'FLOOR', 'FROM_UNIXTIME', 'GEN_ID', 'GEN_UUID_V4', 'GEN_UUID_V7', 'IFNULL',
+            'INNER_PRODUCT', 'IS_SUPERUSER', 'JSON_ARRAY_LENGTH', 'JSON_CONTAINS', 'JSON_EXTRACT', 'JSON_TYPE',
+            'JSON_VALID', 'JSON_VALUE', 'L2_DISTANCE', 'LASTVAL', 'LENGTH', 'LOWER',
+            'LTRIM', 'MAX', 'MD5', 'MIN', 'MOD', 'NEXTVAL',
+            'NOW', 'NVL', 'OCTET_LENGTH', 'POW', 'POWER', 'RANDOM',
+            'REGEXP_COUNT', 'REGEXP_INSTR', 'REGEXP_LIKE', 'REGEXP_MATCH', 'REGEXP_MATCHES', 'REGEXP_REPLACE',
+            'REGEXP_SPLIT_TO_ARRAY', 'REGEXP_SPLIT_TO_TABLE', 'REGEXP_SUBSTR', 'REPLACE', 'ROUND', 'RTRIM',
+            'SETVAL', 'SHA1', 'SHA256', 'SHA512', 'SIGN', 'SQRT',
+            'STARTS_WITH', 'STR_ID', 'SUBSTRING', 'SUM', 'TO_BOOL', 'TO_BYTES',
+            'TO_DATE', 'TO_DATETIME', 'TO_FLOAT32', 'TO_FLOAT64', 'TO_ID', 'TO_INT64',
+            'TO_STRING', 'TRIM', 'UNIX_TIMESTAMP', 'UPPER', 'VECTOR_DIMS',
         ],
+
+        // Quantifiers of a comparison: `x > ALL (SELECT ...)`. See the header comment.
+        quantifiers: ['ALL', 'ANY', 'SOME'],
 
         tokenizer: {
             root: [
@@ -120,8 +137,16 @@
                 // Query parameters: @name, as bound by CamusCommand.Parameters.
                 [/@[A-Za-z_]\w*/, 'variable.parameter'],
 
+                // ANY / SOME / ALL only as a quantifier, that is, with a '(' after it.
+                [/(ALL|ANY|SOME)(?=\s*\()/i, 'operator'],
+
+                // The postfix cast: price::int64, '{"a":1}'::string.
+                [/::/, 'operator'],
+
                 [/[;,.]/, 'delimiter'],
-                [/[()]/, '@brackets'],
+                [/[()\[\]]/, '@brackets'],
+                // Table hints: FROM t@{FORCE_INDEX=idx}.
+                [/[{}]/, 'delimiter.curly'],
 
                 [/[A-Za-z_]\w*/, {
                     cases: {
@@ -152,9 +177,11 @@
                 [/./, 'comment'],
             ],
 
+            // A digit run can carry single underscores between digits for grouping: 200_000,
+            // 1_000.000_5, 1e1_0. Hex integers keep the plain form. See Digits in the lexer.
             numbers: [
                 [/0[xX][0-9a-fA-F]*/, 'number'],
-                [/((\d+(\.\d*)?)|(\.\d+))([eE][\-+]?\d+)?/, 'number'],
+                [/((\d+(_\d+)*(\.(\d+(_\d+)*)?)?)|(\.\d+(_\d+)*))([eE][\-+]?\d+(_\d+)*)?/, 'number'],
             ],
 
             // Both quote styles are string literals in CamusDB — the lexer's String and StringSingle
@@ -273,6 +300,7 @@
         const suggestions = [
             ...definition.keywords.map(w => ({ label: w, kind: Kind.Keyword, insertText: w })),
             ...definition.operators.map(w => ({ label: w, kind: Kind.Operator, insertText: w })),
+            ...definition.quantifiers.map(w => ({ label: w, kind: Kind.Operator, insertText: w })),
             ...definition.builtinTypes.map(w => ({ label: w, kind: Kind.TypeParameter, insertText: w })),
             ...definition.builtinFunctions.map(w => ({
                 label: w,

@@ -46,9 +46,10 @@ public static class SqlBuilder
         "INT64", "INTEGER", "INTO", "IS", "JOIN", "KEY", "LIKE", "LIMIT", "MATERIALIZED", "NOT",
         "NULL", "OBJECT_ID", "OFFSET", "OID", "ON", "OR", "ORDER", "ORPHAN", "PRIMARY",
         "PRIVILEGES", "REAL", "REFRESH", "RELINK", "RENAME", "RESET", "REVOKE", "ROLLBACK",
-        "SELECT", "SET", "SHOW", "SMALLINT", "START", "STRING", "TABLE", "TABLES", "TEXT", "THEN",
-        "TIMESTAMP", "TO", "TRANSACTION", "TRUE", "UNIQUE", "UPDATE", "USER", "UUID", "VALUES",
-        "VARCHAR", "VIEW", "VIEWS", "WHEN", "WHERE", "WITH",
+        "SELECT", "SEQUENCE", "SEQUENCES", "SET", "SHOW", "SMALLINT", "START", "STRING", "TABLE",
+        "TABLES", "TEXT", "THEN", "TIMESTAMP", "TO", "TRANSACTION", "TRUE", "TRUNCATE", "UNIQUE",
+        "UPDATE", "USER", "UUID", "VALUES", "VARCHAR", "VIEW", "VIEWS", "WHEN", "WHERE", "WITH",
+        "WITHOUT",
     };
 
     /// <summary>
@@ -156,6 +157,18 @@ public static class SqlBuilder
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(table);
         return $"DROP TABLE {QuoteIdent(table)}";
+    }
+
+    public static string BuildDropSequence(string sequence)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sequence);
+        return $"DROP SEQUENCE {QuoteIdent(sequence)}";
+    }
+
+    public static string BuildShowCreateSequence(string sequence)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sequence);
+        return $"SHOW CREATE SEQUENCE {QuoteIdent(sequence)}";
     }
 
     public static string BuildDropDatabase(string database)
@@ -526,9 +539,10 @@ public static class SqlBuilder
 
     /// <summary>
     /// Turns what the user typed in a Default cell into the expression that goes inside
-    /// <c>DEFAULT(...)</c>, or null when the cell is empty. Three forms are accepted: a bare
+    /// <c>DEFAULT(...)</c>, or null when the cell is empty. Four forms are accepted: a bare
     /// <c>fn()</c> call (validated against <see cref="DefaultFunctions"/> and the column's type),
-    /// the word NULL, and anything else as a literal of the column's type.
+    /// <c>nextval('seq')</c> on an INT64 column, the word NULL, and anything else as a literal of
+    /// the column's type.
     /// </summary>
     public static bool TryBuildDefaultExpression(
         string? text,
@@ -543,6 +557,23 @@ public static class SqlBuilder
             return true;
 
         string trimmed = text.Trim();
+
+        // nextval('seq') is the one DEFAULT call that takes an argument. A sequence issues int64
+        // values, and the engine refuses it on any other column type
+        // (SQLExecutorCreateTableCreator.RequireIdentityColumnIsInteger).
+        Match nextval = NextvalCallSyntax.Match(trimmed);
+        if (nextval.Success)
+        {
+            string declared = CanonicalType(columnType);
+            if (declared.Length > 0 && declared != "INT64")
+            {
+                error = $"nextval() returns INT64, but the column is {columnType}.";
+                return false;
+            }
+
+            expression = $"nextval({QuoteString(nextval.Groups["seq"].Value)})";
+            return true;
+        }
 
         if (FunctionCallSyntax.IsMatch(trimmed))
         {
@@ -614,4 +645,8 @@ public static class SqlBuilder
     private static readonly Regex FunctionCallSyntax = new(
         @"^[A-Za-z_][A-Za-z0-9_]*\s*\(\s*\)$",
         RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
+    private static readonly Regex NextvalCallSyntax = new(
+        @"^nextval\s*\(\s*(?<q>['""])(?<seq>[A-Za-z_][A-Za-z0-9_]*)\k<q>\s*\)$",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 }

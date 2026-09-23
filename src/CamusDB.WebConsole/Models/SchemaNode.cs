@@ -80,3 +80,26 @@ public sealed class IndexSchemaInfo
 
     public bool Unique { get; init; }
 }
+
+/// <summary>
+/// One row of SHOW SEQUENCES. <c>OwnedBy</c> names the <c>table.column</c> whose identity or SERIAL
+/// declaration created the sequence; a free-standing sequence has none.
+/// </summary>
+public sealed class SequenceSchemaInfo
+{
+    public required string Name { get; init; }
+
+    public string? StartValue { get; init; }
+
+    public string? Increment { get; init; }
+
+    public string? MinValue { get; init; }
+
+    public string? MaxValue { get; init; }
+
+    public string? Cache { get; init; }
+
+    public string? OwnedBy { get; init; }
+
+    public string? Comment { get; init; }
+}

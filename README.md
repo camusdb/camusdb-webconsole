@@ -380,13 +380,17 @@ connection footer showing endpoint, protocol, database, identity, and server ver
 
 The sidebar lists databases and tables via `SHOW DATABASES` / `SHOW TABLES`, expanding a table into its
 columns and indexes with `SHOW COLUMNS FROM` / `SHOW INDEXES FROM`. Filter by name, drag the edge to
-resize, click a database to make it the session database.
+resize, click a database to make it the session database. The sequences of a database (`SHOW
+SEQUENCES`) are listed after its tables; hover one to see its start, increment, bounds, cache and owner.
 
 - Double-click a table to insert `SELECT * FROM {table} LIMIT 100` into the active tab
+- Double-click a sequence to insert `SHOW CREATE SEQUENCE {sequence}` into the active tab
 - **Right-click a database** → *Create a Table* (column name/type/`NOT NULL`/PK builder) or *Drop
   Database* (confirmation required)
 - **Right-click a table** → *Edit/View Data*, *Drop Table* (confirmation required), *Export Table*, or
   *Add an Index* (pick columns, optionally `UNIQUE`)
+- **Right-click a sequence** → *Show Create Sequence* or *Drop Sequence* (confirmation required)
+- In *Create a Table*, an `INT64` column accepts `nextval('seq')` as its default
 
 ### Row editing
 

@@ -148,6 +148,45 @@ public sealed class SchemaExplorerService
         return indexes;
     }
 
+    /// <summary>
+    /// Lists the sequences of the current database. SHOW SEQUENCES arrived with CamusDB's sequence
+    /// support, so an older server rejects it; callers treat a failure as "no sequences".
+    /// </summary>
+    public async Task<IReadOnlyList<SequenceSchemaInfo>> ListSequencesAsync(CancellationToken cancellationToken = default)
+    {
+        await using CamusCommand command = _session.GetConnection().CreateCamusCommand("SHOW SEQUENCES");
+        await using CamusDataReader reader =
+            await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+
+        Dictionary<string, int> ordinals = BuildOrdinalMap(reader);
+        List<SequenceSchemaInfo> sequences = [];
+
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            string name = ReadField(reader, ordinals, "sequence") ?? "";
+            if (name.Length == 0 && reader.FieldCount > 0)
+                name = Convert.ToString(reader.GetValue(0)) ?? "";
+            if (name.Length == 0)
+                continue;
+
+            sequences.Add(new SequenceSchemaInfo
+            {
+                Name = name,
+                StartValue = ReadField(reader, ordinals, "start_value"),
+                Increment = ReadField(reader, ordinals, "increment"),
+                MinValue = ReadField(reader, ordinals, "min_value"),
+                MaxValue = ReadField(reader, ordinals, "max_value"),
+                Cache = ReadField(reader, ordinals, "cache"),
+                OwnedBy = ReadField(reader, ordinals, "owned_by"),
+                Comment = ReadField(reader, ordinals, "comment"),
+            });
+        }
+
+        return sequences
+            .OrderBy(s => s.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
     public async Task<IReadOnlyList<CamusBranchRow>> ListBranchesAsync(
         string database,
         CancellationToken cancellationToken = default)
