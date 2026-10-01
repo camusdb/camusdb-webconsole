@@ -103,6 +103,7 @@ public sealed class CamusSessionService : IAsyncDisposable
         MaxRows = o.MaxRows > 0 ? o.MaxRows : 1000;
         TokenLifetimeSeconds = o.TokenLifetimeSeconds;
         EndpointLocked = o.LockEndpoint;
+        AllowInsecureCredentials = o.AllowInsecureCredentials;
 
         BackupEndpoint = o.BackupEndpoint.Trim();
         BackupTimeoutSeconds = o.BackupTimeoutSeconds;
@@ -130,6 +131,9 @@ public sealed class CamusSessionService : IAsyncDisposable
     public int MaxRows { get; private set; }
 
     public int TokenLifetimeSeconds { get; private set; }
+
+    /// <summary>See <see cref="Options.CamusDbOptions.AllowInsecureCredentials"/>.</summary>
+    public bool AllowInsecureCredentials { get; }
 
     /// <summary>
     /// Explicit backup administration endpoint, or empty to let the driver fall back to
@@ -455,6 +459,9 @@ public sealed class CamusSessionService : IAsyncDisposable
         if (BackupTimeoutSeconds > 0)
             connectionString += $";BackupTimeout={BackupTimeoutSeconds}";
 
+        if (AllowInsecureCredentials)
+            connectionString += ";AllowInsecureCredentials=true";
+
         return connectionString;
     }
 
@@ -487,9 +494,12 @@ public sealed class CamusSessionService : IAsyncDisposable
             + "grant it with GRANT … ON database.table TO user.",
         LoginRateLimitedCode =>
             "Too many login attempts for that account. Wait a minute and try again.",
+        // Two different refusals share this code: the driver's own check, raised before anything is
+        // sent, and the server's. Pointing only at the server flag leaves the driver one unexplained.
         TlsRequiredCode =>
-            "The server refuses credentials over a plaintext connection. Use an https:// endpoint, or "
-            + "start the server with --require-tls-when-auth-enabled false when TLS terminates in front of it.",
+            "Credentials were refused over a plaintext connection. Use an https:// endpoint. If the path "
+            + "to the server is protected some other way, set CamusDB__AllowInsecureCredentials=true for "
+            + "the console, and start the server with --require-tls-when-auth-enabled false.",
         BackupNotConfiguredCode =>
             "Backups are not configured on this node. Set kahuna.backup_dir in the server's config.yml "
             + "and restart it; until then the whole backup surface is unavailable.",

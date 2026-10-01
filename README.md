@@ -35,6 +35,7 @@ Open [http://localhost:8080](http://localhost:8080).
 | `CamusDB__Password` | That user's password |
 | `CamusDB__AccessToken` | A bearer token obtained elsewhere, instead of logging in |
 | `CamusDB__RequireAccessToken` | `true` refuses user/password sign-in — token only (default `false`) |
+| `CamusDB__AllowInsecureCredentials` | `true` sends credentials to a non-loopback `http://` endpoint (default `false`) |
 
 You can also change these later via **Configure** in the app bar.
 
@@ -87,6 +88,7 @@ On first load the console connects using `appsettings.json`. Use **Configure** i
 | `RequireAccessToken` | Refuse user/password sign-in; an access token is the only way in (default `false`) |
 | `TokenLifetimeSeconds` | Fallback token reuse window when the server reports no expiry |
 | `LockEndpoint` | Refuse every endpoint change: the Configure dialog cannot repoint the console, and a launch payload cannot either (default `false`) |
+| `AllowInsecureCredentials` | Send credentials to a non-loopback `http://` endpoint, which the driver otherwise refuses with `CADB0519`. Set it only when TLS terminates in front of the server or the link is private; a server that requires TLS also needs `--require-tls-when-auth-enabled false` (default `false`) |
 
 ### Security controls
 

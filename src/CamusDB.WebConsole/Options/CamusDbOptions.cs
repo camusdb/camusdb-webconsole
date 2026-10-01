@@ -64,6 +64,18 @@ public sealed class CamusDbOptions
     public bool LockEndpoint { get; set; }
 
     /// <summary>
+    /// Let credentials travel to a plaintext <c>http://</c> endpoint that is not loopback. Off by
+    /// default: the driver refuses that combination with CADB0519 before anything leaves the process,
+    /// because the password and bearer token would cross the network in the clear.
+    ///
+    /// <para>Set <c>CamusDB__AllowInsecureCredentials=true</c> only when the path to the server is
+    /// protected some other way — TLS terminating in front of it, a private link, a VPN. A server that
+    /// itself requires TLS still refuses until it is started with
+    /// <c>--require-tls-when-auth-enabled false</c>.</para>
+    /// </summary>
+    public bool AllowInsecureCredentials { get; set; }
+
+    /// <summary>
     /// Fallback seconds to reuse a minted token when the server reports no expiry. 0 leaves the driver
     /// default (10 minutes). When the server does report an expiry, that value wins.
     /// </summary>
