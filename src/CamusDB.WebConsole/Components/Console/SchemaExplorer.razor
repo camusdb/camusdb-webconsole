@@ -147,6 +147,10 @@
                                                          OnClick="() => AddIndexAsync(db, table)">
                                                 Add an Index
                                             </MudMenuItem>
+                                            <MudMenuItem Icon="@Icons.Material.Filled.Link"
+                                                         OnClick="() => AddForeignKeyAsync(db, table)">
+                                                Add a Foreign Key
+                                            </MudMenuItem>
                                             <MudMenuItem Icon="@Icons.Material.Filled.Comment"
                                                          OnClick="() => EditCommentsAsync(db, table)">
                                                 Edit Comments
@@ -186,6 +190,32 @@
                                                             <span class="schema-node-detail">@idx.Columns</span>
                                                         }
                                                     </div>
+                                                }
+                                                @foreach (ForeignKeySchemaInfo fk in table.ForeignKeys)
+                                                {
+                                                    <MudMenu ActivationEvent="MudBlazor.MouseEvent.RightClick"
+                                                             PositionAtCursor="true"
+                                                             Dense="true"
+                                                             Class="schema-context-menu-host">
+                                                        <ActivatorContent>
+                                                            <div class="schema-node"
+                                                                 @oncontextmenu="context.ToggleAsync"
+                                                                 @oncontextmenu:preventDefault="true"
+                                                                 title="@ForeignKeyTitle(fk)">
+                                                                <span style="width:20px;display:inline-block;"></span>
+                                                                <MudIcon Icon="@Icons.Material.Filled.Link" Size="Size.Small" />
+                                                                <span class="schema-node-label">@fk.Name</span>
+                                                                <span class="schema-node-detail">→ @fk.ReferencedTable</span>
+                                                            </div>
+                                                        </ActivatorContent>
+                                                        <ChildContent>
+                                                            <MudMenuItem Icon="@Icons.Material.Filled.Delete"
+                                                                         IconColor="Color.Error"
+                                                                         OnClick="() => DropForeignKeyAsync(db, table, fk)">
+                                                                Drop Constraint
+                                                            </MudMenuItem>
+                                                        </ChildContent>
+                                                    </MudMenu>
                                                 }
                                                 @if (table.Columns.Count == 0 && table.Indexes.Count == 0)
                                                 {
@@ -466,6 +496,7 @@
             await Session.ChangeDatabaseAsync(db.Name, notify: true);
             table.Columns = (await Schema.ListColumnsAsync(table.Name)).ToList();
             table.Indexes = (await Schema.ListIndexesAsync(table.Name)).ToList();
+            table.ForeignKeys = await LoadForeignKeysAsync(table.Name);
             table.Loaded = true;
         }
         catch (Exception ex)
@@ -489,6 +520,22 @@
         try
         {
             return (await Schema.ListSequencesAsync()).ToList();
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
+    /// <summary>
+    /// Foreign keys are secondary to the columns and indexes: a server older than foreign keys
+    /// renders none, and SHOW CREATE TABLE can fail where SHOW COLUMNS did not.
+    /// </summary>
+    private async Task<List<ForeignKeySchemaInfo>> LoadForeignKeysAsync(string table)
+    {
+        try
+        {
+            return (await Schema.ListForeignKeysAsync(table)).ToList();
         }
         catch
         {
@@ -527,6 +574,17 @@
             sb.Append(", owned by ").Append(seq.OwnedBy);
         if (!string.IsNullOrEmpty(seq.Comment))
             sb.Append('\n').Append(seq.Comment);
+        return sb.ToString();
+    }
+
+    private static string ForeignKeyTitle(ForeignKeySchemaInfo fk)
+    {
+        System.Text.StringBuilder sb = new();
+        sb.Append(fk.Name).Append(" — (").Append(string.Join(", ", fk.Columns))
+            .Append(") references ").Append(fk.ReferencedTable)
+            .Append(" (").Append(string.Join(", ", fk.ReferencedColumns)).Append(')')
+            .Append("\nON DELETE ").Append(fk.OnDelete)
+            .Append(", ON UPDATE ").Append(fk.OnUpdate);
         return sb.ToString();
     }
 
@@ -572,6 +630,7 @@
             var parameters = new DialogParameters<CreateTableDialog>
             {
                 { x => x.Database, db.Name },
+                { x => x.Tables, db.Tables.Select(t => t.Name).ToList() },
             };
 
             IDialogReference dialog = await DialogService.ShowAsync<CreateTableDialog>("Create table", parameters, WideDialogOptions);
@@ -748,6 +807,73 @@
         }
     }
 
+    private async Task AddForeignKeyAsync(DbEntry db, TableEntry table)
+    {
+        try
+        {
+            await Session.ChangeDatabaseAsync(db.Name, notify: true);
+            if (!table.Loaded)
+                await LoadTableDetailsAsync(db, table);
+
+            if (table.Columns.Count == 0)
+            {
+                Snackbar.Add("Table has no columns to reference from.", Severity.Warning);
+                return;
+            }
+
+            var parameters = new DialogParameters<AddForeignKeyDialog>
+            {
+                { x => x.Table, table.Name },
+                { x => x.Columns, table.Columns.ToList() },
+                { x => x.Tables, db.Tables.Select(t => t.Name).ToList() },
+            };
+
+            IDialogReference dialog = await DialogService.ShowAsync<AddForeignKeyDialog>("Add foreign key", parameters, WideDialogOptions);
+            DialogResult? result = await dialog.Result;
+            if (result is { Canceled: false })
+                await ReloadTableDetailsAsync(db, table);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    private async Task DropForeignKeyAsync(DbEntry db, TableEntry table, ForeignKeySchemaInfo fk)
+    {
+        bool ok = await ConfirmAsync(
+            "Drop constraint",
+            $"Drop foreign key '{fk.Name}' on table '{table.Name}'? Its index is dropped too if the constraint created it.",
+            "Drop Constraint");
+        if (!ok)
+            return;
+
+        try
+        {
+            await Session.ChangeDatabaseAsync(db.Name, notify: true);
+            QueryResultModel result = await Queries.ExecuteAsync(SqlBuilder.BuildDropConstraint(table.Name, fk.Name));
+            if (!result.Success)
+            {
+                Snackbar.Add(result.ErrorMessage ?? "Drop constraint failed.", Severity.Error);
+                return;
+            }
+
+            Snackbar.Add($"Foreign key '{fk.Name}' dropped.", Severity.Success);
+            await ReloadTableDetailsAsync(db, table);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    private async Task ReloadTableDetailsAsync(DbEntry db, TableEntry table)
+    {
+        table.Loaded = false;
+        if (table.Expanded)
+            await LoadTableDetailsAsync(db, table);
+    }
+
     private async Task EditCommentsAsync(DbEntry db, TableEntry table)
     {
         try
@@ -821,5 +947,6 @@
         public bool Loading { get; set; }
         public List<ColumnSchemaInfo> Columns { get; set; } = [];
         public List<IndexSchemaInfo> Indexes { get; set; } = [];
+        public List<ForeignKeySchemaInfo> ForeignKeys { get; set; } = [];
     }
 }

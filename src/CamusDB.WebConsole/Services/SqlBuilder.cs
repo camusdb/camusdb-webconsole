@@ -39,13 +39,14 @@ public static class SqlBuilder
         "ADD", "ALTER", "ANALYZE", "ANCESTORS", "AND", "ARRAY", "AS", "ASC", "BEGIN", "BETWEEN",
         "BLOB", "BOOL", "BOOLEAN", "BRANCH", "BRANCHES", "BY", "BYTES", "CASE", "CAST", "CHAR",
         "CHECK", "COLUMN", "COLUMNS", "COMMENT", "COMMIT", "CONSTRAINT", "CREATE", "DATABASE",
-        "DATABASES", "DATE", "DATETIME", "DEFAULT", "DELETE", "DESC", "DESCRIBE", "DISTINCT",
-        "DOUBLE", "DROP", "ELSE", "END", "EVICT", "EXISTS", "EXPLAIN", "FALSE", "FLOAT", "FLOAT32",
-        "FLOAT64", "FOR", "FORCE", "FROM", "GRANT", "GRANTS", "GROUP", "GUID", "HAVING",
-        "IDENTIFIED", "IF", "ILIKE", "IN", "INCLUDE", "INDEX", "INDEXES", "INNER", "INSERT", "INT",
-        "INT64", "INTEGER", "INTO", "IS", "JOIN", "KEY", "LIKE", "LIMIT", "MATERIALIZED", "NOT",
-        "NULL", "OBJECT_ID", "OFFSET", "OID", "ON", "OR", "ORDER", "ORPHAN", "PRIMARY",
-        "PRIVILEGES", "REAL", "REFRESH", "RELINK", "RENAME", "RESET", "REVOKE", "ROLLBACK",
+        "DATABASES", "DATE", "DATETIME", "DEFAULT", "DEFERRABLE", "DELETE", "DESC", "DESCRIBE",
+        "DISTINCT", "DOUBLE", "DROP", "ELSE", "END", "EVICT", "EXISTS", "EXPLAIN", "FALSE", "FLOAT",
+        "FLOAT32", "FLOAT64", "FOR", "FORCE", "FOREIGN", "FROM", "GRANT", "GRANTS", "GROUP", "GUID",
+        "HAVING", "IDENTIFIED", "IF", "ILIKE", "IN", "INCLUDE", "INDEX", "INDEXES", "INITIALLY",
+        "INNER", "INSERT", "INT", "INT64", "INTEGER", "INTO", "IS", "JOIN", "KEY", "LIKE", "LIMIT",
+        "MATERIALIZED", "NOT", "NULL", "OBJECT_ID", "OFFSET", "OID", "ON", "OR", "ORDER", "ORPHAN",
+        "PRIMARY", "PRIVILEGES", "REAL", "REFERENCES", "REFRESH", "RELINK", "RENAME", "RESET",
+        "REVOKE", "ROLLBACK",
         "SELECT", "SEQUENCE", "SEQUENCES", "SET", "SHOW", "SMALLINT", "START", "STRING", "TABLE",
         "TABLES", "TEXT", "THEN", "TIMESTAMP", "TO", "TRANSACTION", "TRUE", "TRUNCATE", "UNIQUE",
         "UPDATE", "USER", "UUID", "VALUES", "VARCHAR", "VIEW", "VIEWS", "WHEN", "WHERE", "WITH",
@@ -181,11 +182,14 @@ public static class SqlBuilder
     /// Emits the column list in the clause order SHOW CREATE TABLE renders — type, NOT NULL,
     /// DEFAULT, COMMENT — so a table created here and one round-tripped through the server's own
     /// DDL read the same. <paramref name="tableComment"/> becomes the trailing <c>) COMMENT '…'</c>.
+    /// Each of <paramref name="foreignKeys"/> follows the primary key as a table constraint, which
+    /// is also the form SHOW CREATE TABLE renders.
     /// </summary>
     public static string BuildCreateTable(
         string table,
         IReadOnlyList<ColumnDefinition> columns,
-        string? tableComment = null)
+        string? tableComment = null,
+        IReadOnlyList<ForeignKeyDefinition>? foreignKeys = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(table);
         if (columns.Count == 0)
@@ -216,6 +220,9 @@ public static class SqlBuilder
         List<string> pk = columns.Where(c => c.PrimaryKey).Select(c => QuoteIdent(c.Name)).ToList();
         if (pk.Count > 0)
             sb.Append(", PRIMARY KEY (").Append(string.Join(", ", pk)).Append(')');
+
+        foreach (ForeignKeyDefinition foreignKey in foreignKeys ?? [])
+            AppendForeignKey(sb.Append(", "), foreignKey);
 
         sb.Append(')');
 
@@ -267,6 +274,69 @@ public static class SqlBuilder
         string prefix = unique ? "CREATE UNIQUE INDEX " : "CREATE INDEX ";
         string cols = string.Join(", ", columns.Select(QuoteIdent));
         return $"{prefix}{QuoteIdent(indexName)} ON {QuoteIdent(table)} ({cols})";
+    }
+
+    /// <summary>
+    /// <c>ALTER TABLE t ADD [CONSTRAINT name] FOREIGN KEY (...) REFERENCES p [(...)]</c>. The server
+    /// reads every existing row before the constraint takes effect, so the statement fails with
+    /// CADB0304 when a row has no parent.
+    /// </summary>
+    public static string BuildAddForeignKey(string table, ForeignKeyDefinition foreignKey)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(table);
+
+        StringBuilder sb = new();
+        sb.Append("ALTER TABLE ").Append(QuoteIdent(table)).Append(" ADD ");
+        AppendForeignKey(sb, foreignKey);
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// <c>ALTER TABLE t DROP CONSTRAINT name</c>. CHECK, named NOT NULL and FOREIGN KEY constraints
+    /// share one name space per table, so the name alone selects the constraint.
+    /// </summary>
+    public static string BuildDropConstraint(string table, string constraint)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(table);
+        ArgumentException.ThrowIfNullOrWhiteSpace(constraint);
+        return $"ALTER TABLE {QuoteIdent(table)} DROP CONSTRAINT {QuoteIdent(constraint)}";
+    }
+
+    /// <summary>
+    /// The table-constraint form, in the clause order SHOW CREATE TABLE renders. ON DELETE and ON
+    /// UPDATE are written only for an action other than the default, NO ACTION, as the server does.
+    /// </summary>
+    private static void AppendForeignKey(StringBuilder sb, ForeignKeyDefinition foreignKey)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(foreignKey.ReferencedTable);
+        if (foreignKey.Columns.Count == 0)
+            throw new ArgumentException("A foreign key needs at least one column.", nameof(foreignKey));
+        if (foreignKey.ReferencedColumns.Count > 0 && foreignKey.ReferencedColumns.Count != foreignKey.Columns.Count)
+            throw new ArgumentException(
+                "A foreign key needs as many referenced columns as referencing columns.", nameof(foreignKey));
+
+        if (!string.IsNullOrWhiteSpace(foreignKey.Name))
+            sb.Append("CONSTRAINT ").Append(QuoteIdent(foreignKey.Name.Trim())).Append(' ');
+
+        sb.Append("FOREIGN KEY (").Append(string.Join(", ", foreignKey.Columns.Select(QuoteIdent))).Append(')');
+        sb.Append(" REFERENCES ").Append(QuoteIdent(foreignKey.ReferencedTable));
+
+        if (foreignKey.ReferencedColumns.Count > 0)
+            sb.Append(" (").Append(string.Join(", ", foreignKey.ReferencedColumns.Select(QuoteIdent))).Append(')');
+
+        AppendForeignKeyAction(sb, "DELETE", foreignKey.OnDelete);
+        AppendForeignKeyAction(sb, "UPDATE", foreignKey.OnUpdate);
+    }
+
+    private static void AppendForeignKeyAction(StringBuilder sb, string verb, string? action)
+    {
+        if (string.IsNullOrWhiteSpace(action) || action.Equals(SqlForeignKeyActions.NoAction, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        if (!SqlForeignKeyActions.Supported.Contains(action, StringComparer.OrdinalIgnoreCase))
+            throw new ArgumentException($"ON {verb} {action} is not supported. Use NO ACTION or RESTRICT.");
+
+        sb.Append(" ON ").Append(verb).Append(' ').Append(action.ToUpperInvariant());
     }
 
     public static string BuildUpdate(

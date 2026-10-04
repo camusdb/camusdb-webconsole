@@ -1,4 +1,5 @@
 @inject QueryExecutionService Queries
+@inject SchemaExplorerService Schema
 @inject ISnackbar Snackbar
 
 <MudDialog>
@@ -71,6 +72,72 @@
                 Add column
             </MudButton>
 
+            <MudText Typo="Typo.subtitle2">Foreign keys</MudText>
+            @foreach (ForeignKeyDraft fk in _foreignKeys)
+            {
+                <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center">
+                    <MudSelect T="string"
+                               @bind-Value="fk.Column"
+                               Label="Column"
+                               Variant="Variant.Outlined"
+                               Margin="Margin.Dense"
+                               Style="flex:1; min-width:90px;">
+                        @foreach (string name in _columns.Select(c => c.Name.Trim()).Where(n => n.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase))
+                        {
+                            <MudSelectItem Value="@name">@name</MudSelectItem>
+                        }
+                    </MudSelect>
+                    <MudSelect T="string"
+                               Value="fk.ReferencedTable"
+                               ValueChanged="t => OnReferencedTableChangedAsync(fk, t)"
+                               Label="References"
+                               Variant="Variant.Outlined"
+                               Margin="Margin.Dense"
+                               Style="flex:1; min-width:110px;">
+                        @foreach (string t in ReferenceableTables())
+                        {
+                            <MudSelectItem Value="@t">@t</MudSelectItem>
+                        }
+                    </MudSelect>
+                    <MudSelect T="string"
+                               @bind-Value="fk.ReferencedColumn"
+                               Label="Referenced column"
+                               Placeholder="primary key"
+                               Clearable="true"
+                               Variant="Variant.Outlined"
+                               Margin="Margin.Dense"
+                               Style="flex:1; min-width:110px;">
+                        @foreach (string name in ParentColumns(fk))
+                        {
+                            <MudSelectItem Value="@name">@name</MudSelectItem>
+                        }
+                    </MudSelect>
+                    <MudSelect T="string" @bind-Value="fk.OnDelete" Label="ON DELETE" Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:120px;">
+                        @foreach (string action in SqlForeignKeyActions.Supported)
+                        {
+                            <MudSelectItem Value="@action">@action</MudSelectItem>
+                        }
+                    </MudSelect>
+                    <MudSelect T="string" @bind-Value="fk.OnUpdate" Label="ON UPDATE" Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:120px;">
+                        @foreach (string action in SqlForeignKeyActions.Supported)
+                        {
+                            <MudSelectItem Value="@action">@action</MudSelectItem>
+                        }
+                    </MudSelect>
+                    <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                                   Size="Size.Small"
+                                   OnClick="() => _foreignKeys.Remove(fk)"
+                                   aria-label="Remove foreign key" />
+                </MudStack>
+            }
+
+            <MudButton Variant="Variant.Text"
+                       Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Link"
+                       OnClick="() => _foreignKeys.Add(new ForeignKeyDraft())">
+                Add foreign key
+            </MudButton>
+
             <MudField Label="SQL preview" Variant="Variant.Outlined">
                 <pre class="sql-preview">@(Preview() ?? "-- fill in a table name --")</pre>
             </MudField>
@@ -100,10 +167,15 @@
     [Parameter]
     public string Database { get; set; } = "";
 
+    /// <summary>The existing tables of the database, offered as the parent of a foreign key.</summary>
+    [Parameter]
+    public IReadOnlyList<string> Tables { get; set; } = [];
+
     private string _database = "";
     private string _tableName = "";
     private string _tableComment = "";
     private readonly List<ColumnDraft> _columns = [];
+    private readonly List<ForeignKeyDraft> _foreignKeys = [];
     private string? _error;
     private bool _busy;
 
@@ -120,6 +192,51 @@
     private void RemoveColumn(ColumnDraft col) => _columns.Remove(col);
 
     private void Cancel() => MudDialog.Cancel();
+
+    /// <summary>
+    /// The existing tables, plus the new table itself once it has a name: a self-reference is legal.
+    /// </summary>
+    private IEnumerable<string> ReferenceableTables()
+    {
+        string self = _tableName.Trim();
+        if (self.Length > 0 && !Tables.Contains(self, StringComparer.OrdinalIgnoreCase))
+            yield return self;
+
+        foreach (string t in Tables)
+            yield return t;
+    }
+
+    private bool IsSelfReference(ForeignKeyDraft fk) =>
+        fk.ReferencedTable is not null
+        && fk.ReferencedTable.Equals(_tableName.Trim(), StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The columns of the parent. A self-reference reads the columns drafted in this dialog, so a
+    /// rename there shows at once.
+    /// </summary>
+    private IEnumerable<string> ParentColumns(ForeignKeyDraft fk) =>
+        IsSelfReference(fk)
+            ? _columns.Select(c => c.Name.Trim()).Where(n => n.Length > 0)
+            : fk.ParentColumns;
+
+    private async Task OnReferencedTableChangedAsync(ForeignKeyDraft fk, string table)
+    {
+        fk.ReferencedTable = table;
+        fk.ReferencedColumn = null;
+        fk.ParentColumns = [];
+
+        if (string.IsNullOrWhiteSpace(table) || IsSelfReference(fk))
+            return;
+
+        try
+        {
+            fk.ParentColumns = (await Schema.ListColumnsAsync(table)).Select(c => c.Name).ToList();
+        }
+        catch
+        {
+            // The column stays "primary key", which needs no column list.
+        }
+    }
 
     /// <summary>
     /// The DEFAULT functions this column's type can actually take. The engine demands an exact
@@ -204,9 +321,33 @@
                 comment));
         }
 
+        List<ForeignKeyDefinition> foreignKeys = [];
+        foreach (ForeignKeyDraft fk in _foreignKeys)
+        {
+            if (string.IsNullOrWhiteSpace(fk.Column) || string.IsNullOrWhiteSpace(fk.ReferencedTable))
+            {
+                error = "Every foreign key needs a column and a referenced table.";
+                return false;
+            }
+
+            if (!cols.Any(c => c.Name.Equals(fk.Column, StringComparison.OrdinalIgnoreCase)))
+            {
+                error = $"Foreign key column '{fk.Column}' is not a column of the table.";
+                return false;
+            }
+
+            foreignKeys.Add(new ForeignKeyDefinition(
+                null,
+                [fk.Column],
+                fk.ReferencedTable,
+                string.IsNullOrWhiteSpace(fk.ReferencedColumn) ? [] : [fk.ReferencedColumn],
+                fk.OnDelete,
+                fk.OnUpdate));
+        }
+
         try
         {
-            sql = SqlBuilder.BuildCreateTable(_tableName.Trim(), cols, NullIfEmpty(_tableComment));
+            sql = SqlBuilder.BuildCreateTable(_tableName.Trim(), cols, NullIfEmpty(_tableComment), foreignKeys);
         }
         catch (Exception ex)
         {
@@ -261,5 +402,19 @@
         public string Comment { get; set; } = "";
         public bool NotNull { get; set; }
         public bool PrimaryKey { get; set; }
+    }
+
+    /// <summary>
+    /// One single-column foreign key. A composite key needs Add a Foreign Key on the table after it
+    /// exists, or SQL in the editor. A null <c>ReferencedColumn</c> references the primary key.
+    /// </summary>
+    private sealed class ForeignKeyDraft
+    {
+        public string? Column { get; set; }
+        public string? ReferencedTable { get; set; }
+        public string? ReferencedColumn { get; set; }
+        public List<string> ParentColumns { get; set; } = [];
+        public string OnDelete { get; set; } = SqlForeignKeyActions.NoAction;
+        public string OnUpdate { get; set; } = SqlForeignKeyActions.NoAction;
     }
 }

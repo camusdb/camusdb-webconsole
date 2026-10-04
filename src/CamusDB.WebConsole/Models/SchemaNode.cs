@@ -103,3 +103,49 @@ public sealed class SequenceSchemaInfo
 
     public string? Comment { get; init; }
 }
+
+/// <summary>
+/// One foreign key, read back out of SHOW CREATE TABLE. There is no SHOW FOREIGN KEYS, so the
+/// constraint clause the server renders is the only read surface. <c>OnDelete</c> and
+/// <c>OnUpdate</c> hold the action words as rendered (<c>NO ACTION</c> when the clause is absent).
+/// </summary>
+public sealed class ForeignKeySchemaInfo
+{
+    public required string Name { get; init; }
+
+    public IReadOnlyList<string> Columns { get; init; } = [];
+
+    public required string ReferencedTable { get; init; }
+
+    public IReadOnlyList<string> ReferencedColumns { get; init; } = [];
+
+    public string OnDelete { get; init; } = SqlForeignKeyActions.NoAction;
+
+    public string OnUpdate { get; init; } = SqlForeignKeyActions.NoAction;
+}
+
+/// <summary>
+/// A foreign key as the console builds it. An empty <c>ReferencedColumns</c> references the parent's
+/// primary key; a null <c>Name</c> lets the server pick <c>{table}_{column}_fkey</c>.
+/// </summary>
+public sealed record ForeignKeyDefinition(
+    string? Name,
+    IReadOnlyList<string> Columns,
+    string ReferencedTable,
+    IReadOnlyList<string> ReferencedColumns,
+    string OnDelete = SqlForeignKeyActions.NoAction,
+    string OnUpdate = SqlForeignKeyActions.NoAction);
+
+/// <summary>
+/// The referential actions. CamusDB stores all four PostgreSQL actions but runs only NO ACTION and
+/// RESTRICT; CASCADE, SET NULL and SET DEFAULT are refused with CADB0533, so the console offers only
+/// <see cref="Supported"/>.
+/// </summary>
+public static class SqlForeignKeyActions
+{
+    public const string NoAction = "NO ACTION";
+
+    public const string Restrict = "RESTRICT";
+
+    public static readonly string[] Supported = [NoAction, Restrict];
+}

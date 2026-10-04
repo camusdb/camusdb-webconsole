@@ -381,7 +381,9 @@ connection footer showing endpoint, protocol, database, identity, and server ver
 ### Schema browser
 
 The sidebar lists databases and tables via `SHOW DATABASES` / `SHOW TABLES`, expanding a table into its
-columns and indexes with `SHOW COLUMNS FROM` / `SHOW INDEXES FROM`. Filter by name, drag the edge to
+columns and indexes with `SHOW COLUMNS FROM` / `SHOW INDEXES FROM`, and its foreign keys, which are
+read from `SHOW CREATE TABLE` because no other statement lists them. Hover a foreign key to see its
+columns, its parent and its `ON DELETE` / `ON UPDATE` actions. Filter by name, drag the edge to
 resize, click a database to make it the session database. The sequences of a database (`SHOW
 SEQUENCES`) are listed after its tables; hover one to see its start, increment, bounds, cache and owner.
 
@@ -389,10 +391,19 @@ SEQUENCES`) are listed after its tables; hover one to see its start, increment, 
 - Double-click a sequence to insert `SHOW CREATE SEQUENCE {sequence}` into the active tab
 - **Right-click a database** → *Create a Table* (column name/type/`NOT NULL`/PK builder) or *Drop
   Database* (confirmation required)
-- **Right-click a table** → *Edit/View Data*, *Drop Table* (confirmation required), *Export Table*, or
-  *Add an Index* (pick columns, optionally `UNIQUE`)
+- **Right-click a table** → *Edit/View Data*, *Drop Table* (confirmation required), *Export Table*,
+  *Add an Index* (pick columns, optionally `UNIQUE`), or *Add a Foreign Key* (pick the parent table,
+  then one or more column pairs; the dialog proposes the parent's primary key). The server checks
+  every existing row first, so a row without a parent fails the statement with `CADB0304`
+- **Right-click a foreign key** → *Drop Constraint* (confirmation required). An index that the
+  constraint created goes with it
 - **Right-click a sequence** → *Show Create Sequence* or *Drop Sequence* (confirmation required)
 - In *Create a Table*, an `INT64` column accepts `nextval('seq')` as its default
+- In *Create a Table*, *Add foreign key* adds a single-column foreign key to an existing table, or to
+  the new table itself. An empty *Referenced column* references the parent's primary key. For a
+  composite key, use *Add a Foreign Key* after the table exists
+- Both dialogs offer `NO ACTION` and `RESTRICT` only. CamusDB refuses `CASCADE`, `SET NULL` and
+  `SET DEFAULT` with `CADB0533`
 
 ### Row editing
 
@@ -428,7 +439,7 @@ are persisted to `localStorage` and restored on the next visit. Passwords and to
 ```
 src/CamusDB.WebConsole/
   Components/Console/   # Schema tree, editor, results grid, dialogs (configure, create table,
-                        # add index, edit record, export, confirm)
+                        # add index, add foreign key, edit record, export, confirm)
   Components/Layout/    # Main shell + theme
   Services/             # Session, schema, query execution, export, preferences, SQL builder
   Models/               # Query results, schema nodes, table data context, UI preferences

@@ -22,6 +22,12 @@
  * INCREMENT, MINVALUE, MAXVALUE, NO, CYCLE, CACHE, RESTART, OWNED, IDENTITY, GENERATED, ALWAYS,
  * SERIAL and CONTINUE are plain identifiers that the parse action checks.
  *
+ * Foreign keys add four reserved words, FOREIGN, REFERENCES, DEFERRABLE and INITIALLY, plus NO ACTION,
+ * which the lexer matches as ONE token across the two words (TNoAction). A lone NO stays an
+ * identifier, so it is colored only when ACTION follows. MATCH, SIMPLE, FULL, PARTIAL, RESTRICT,
+ * CASCADE, DEFERRED and IMMEDIATE are plain identifiers that the parse action checks. Do not promote
+ * one to a keyword here.
+ *
  * Registered as its own language id rather than by overriding "sql": Monaco loads a basic language's
  * tokenizer lazily, on first use, so replacing the "sql" provider at page load races with that import
  * and can be silently overwritten.
@@ -51,18 +57,19 @@
             'ADD', 'ALTER', 'ANALYZE', 'ANCESTORS', 'AS', 'ASC',
             'BEGIN', 'BRANCH', 'BRANCHES', 'BY', 'CASE', 'CAST',
             'CHECK', 'COLUMN', 'COLUMNS', 'COMMENT', 'COMMIT', 'CONSTRAINT',
-            'CREATE', 'DATABASE', 'DATABASES', 'DEFAULT', 'DELETE', 'DESC',
-            'DESCRIBE', 'DISTINCT', 'DROP', 'ELSE', 'END', 'EVICT',
-            'EXPLAIN', 'FALSE', 'FOR', 'FORCE', 'FROM', 'GRANT',
-            'GRANTS', 'GROUP', 'HAVING', 'IDENTIFIED', 'IF', 'INCLUDE',
-            'INDEX', 'INDEXES', 'INNER', 'INSERT', 'INTO', 'JOIN',
-            'KEY', 'LIMIT', 'MATERIALIZED', 'NULL', 'OFFSET', 'ON',
-            'ORDER', 'ORPHAN', 'PRIMARY', 'PRIVILEGES', 'REFRESH', 'RELINK',
-            'RENAME', 'RESET', 'REVOKE', 'ROLLBACK', 'SELECT', 'SEQUENCE',
-            'SEQUENCES', 'SET', 'SHOW', 'START', 'TABLE', 'TABLES',
-            'THEN', 'TO', 'TRANSACTION', 'TRUE', 'TRUNCATE', 'UNIQUE',
-            'UPDATE', 'USER', 'VALUES', 'VIEW', 'VIEWS', 'WHEN',
-            'WHERE', 'WITH', 'WITHOUT',
+            'CREATE', 'DATABASE', 'DATABASES', 'DEFAULT', 'DEFERRABLE', 'DELETE',
+            'DESC', 'DESCRIBE', 'DISTINCT', 'DROP', 'ELSE', 'END',
+            'EVICT', 'EXPLAIN', 'FALSE', 'FOR', 'FORCE', 'FOREIGN',
+            'FROM', 'GRANT', 'GRANTS', 'GROUP', 'HAVING', 'IDENTIFIED',
+            'IF', 'INCLUDE', 'INDEX', 'INDEXES', 'INITIALLY', 'INNER',
+            'INSERT', 'INTO', 'JOIN', 'KEY', 'LIMIT', 'MATERIALIZED',
+            'NULL', 'OFFSET', 'ON', 'ORDER', 'ORPHAN', 'PRIMARY',
+            'PRIVILEGES', 'REFERENCES', 'REFRESH', 'RELINK', 'RENAME', 'RESET',
+            'REVOKE', 'ROLLBACK', 'SELECT', 'SEQUENCE', 'SEQUENCES', 'SET',
+            'SHOW', 'START', 'TABLE', 'TABLES', 'THEN', 'TO',
+            'TRANSACTION', 'TRUE', 'TRUNCATE', 'UNIQUE', 'UPDATE', 'USER',
+            'VALUES', 'VIEW', 'VIEWS', 'WHEN', 'WHERE', 'WITH',
+            'WITHOUT',
         ],
 
         operators: [
@@ -225,6 +232,10 @@
                 [/IF\s+NOT\s+EXISTS\b/i, 'keyword'],
                 [/IF\s+EXISTS\b/i, 'keyword'],
                 [/PRIMARY\s+KEY\b/i, 'keyword'],
+                // ON DELETE NO ACTION: one TNOACTION token in the lexer. The lexer also accepts a line
+                // break between the two words, but Monarch tokenizes one line at a time, so that form
+                // leaves NO uncolored.
+                [/NO\s+ACTION\b/i, 'keyword'],
                 [/ORDER\s+BY\b/i, 'keyword'],
                 [/GROUP\s+BY\b/i, 'keyword'],
                 [/(BEGIN|CASE)\b/i, 'keyword.block'],
@@ -299,6 +310,8 @@
         const Kind = languages.CompletionItemKind;
         const suggestions = [
             ...definition.keywords.map(w => ({ label: w, kind: Kind.Keyword, insertText: w })),
+            // Not in the keyword list: a lone NO is an identifier. See the header comment.
+            { label: 'NO ACTION', kind: Kind.Keyword, insertText: 'NO ACTION' },
             ...definition.operators.map(w => ({ label: w, kind: Kind.Operator, insertText: w })),
             ...definition.quantifiers.map(w => ({ label: w, kind: Kind.Operator, insertText: w })),
             ...definition.builtinTypes.map(w => ({ label: w, kind: Kind.TypeParameter, insertText: w })),

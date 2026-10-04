@@ -108,6 +108,18 @@ public sealed class SchemaExplorerService
         return ShowCreateTableParser.Parse(ddl);
     }
 
+    /// <summary>
+    /// The foreign keys this table declares, recovered from SHOW CREATE TABLE. The server renders a
+    /// constraint only once it is Public, so one that ADD CONSTRAINT is still validating is absent.
+    /// </summary>
+    public async Task<IReadOnlyList<ForeignKeySchemaInfo>> ListForeignKeysAsync(
+        string table,
+        CancellationToken cancellationToken = default)
+    {
+        string? ddl = await ShowCreateTableAsync(table, cancellationToken).ConfigureAwait(false);
+        return ShowCreateTableParser.ParseForeignKeys(ddl);
+    }
+
     public async Task<IReadOnlyList<IndexSchemaInfo>> ListIndexesAsync(
         string table,
         CancellationToken cancellationToken = default)

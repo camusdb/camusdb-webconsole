@@ -1,0 +1,287 @@
+@inject QueryExecutionService Queries
+@inject SchemaExplorerService Schema
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <TitleContent>
+        <MudText Typo="Typo.h6">Add foreign key</MudText>
+    </TitleContent>
+    <DialogContent>
+        <MudStack Spacing="3" Class="mt-2">
+            <MudText Typo="Typo.caption" Class="mud-text-secondary">Table: @_table</MudText>
+            <MudTextField @bind-Value="_name"
+                          Label="Constraint name (optional)"
+                          Placeholder="@DefaultName()"
+                          Variant="Variant.Outlined"
+                          Immediate="true" />
+            <MudSelect T="string"
+                       Value="_referencedTable"
+                       ValueChanged="OnReferencedTableChangedAsync"
+                       Label="Referenced table"
+                       Variant="Variant.Outlined">
+                @foreach (string t in _tables)
+                {
+                    <MudSelectItem Value="@t">@t</MudSelectItem>
+                }
+            </MudSelect>
+
+            <MudText Typo="Typo.subtitle2">Columns</MudText>
+            @if (_loadingParent)
+            {
+                <MudProgressLinear Indeterminate="true" />
+            }
+            @foreach (ColumnPair pair in _pairs)
+            {
+                <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center">
+                    <MudSelect T="string"
+                               @bind-Value="pair.Column"
+                               Label="Column"
+                               Variant="Variant.Outlined"
+                               Margin="Margin.Dense"
+                               Style="flex:1;">
+                        @foreach (ColumnSchemaInfo col in _columns)
+                        {
+                            <MudSelectItem Value="@col.Name">@col.Name (@(col.Type ?? "?"))</MudSelectItem>
+                        }
+                    </MudSelect>
+                    <MudIcon Icon="@Icons.Material.Filled.ArrowForward" Size="Size.Small" />
+                    <MudSelect T="string"
+                               @bind-Value="pair.ReferencedColumn"
+                               Label="Referenced column"
+                               Variant="Variant.Outlined"
+                               Margin="Margin.Dense"
+                               Style="flex:1;">
+                        @foreach (ColumnSchemaInfo col in _parentColumns)
+                        {
+                            <MudSelectItem Value="@col.Name">@col.Name (@(col.Type ?? "?"))@(col.IsPrimaryKey ? " — PK" : "")</MudSelectItem>
+                        }
+                    </MudSelect>
+                    <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                                   Size="Size.Small"
+                                   Disabled="_pairs.Count <= 1"
+                                   OnClick="() => _pairs.Remove(pair)"
+                                   aria-label="Remove column pair" />
+                </MudStack>
+            }
+            <MudButton Variant="Variant.Text"
+                       Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Add"
+                       OnClick="() => _pairs.Add(new ColumnPair())">
+                Add column pair
+            </MudButton>
+            <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                The referenced columns must be the parent's primary key or one of its unique indexes.
+            </MudText>
+
+            <MudStack Row="true" Spacing="2">
+                <MudSelect T="string" @bind-Value="_onDelete" Label="ON DELETE" Variant="Variant.Outlined" Margin="Margin.Dense" Style="flex:1;">
+                    @foreach (string action in SqlForeignKeyActions.Supported)
+                    {
+                        <MudSelectItem Value="@action">@action</MudSelectItem>
+                    }
+                </MudSelect>
+                <MudSelect T="string" @bind-Value="_onUpdate" Label="ON UPDATE" Variant="Variant.Outlined" Margin="Margin.Dense" Style="flex:1;">
+                    @foreach (string action in SqlForeignKeyActions.Supported)
+                    {
+                        <MudSelectItem Value="@action">@action</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudStack>
+
+            <MudField Label="SQL preview" Variant="Variant.Outlined">
+                <pre class="sql-preview">@(Preview() ?? "-- pick a referenced table and its columns --")</pre>
+            </MudField>
+
+            <MudAlert Severity="Severity.Info" Dense="true">
+                The server checks every existing row first. A row without a parent fails the statement (CADB0304).
+            </MudAlert>
+
+            @if (!string.IsNullOrEmpty(_error))
+            {
+                <MudAlert Severity="Severity.Error" Dense="true">@_error</MudAlert>
+            }
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel" Disabled="_busy">Cancel</MudButton>
+        <MudButton Color="Color.Primary"
+                   Variant="Variant.Filled"
+                   OnClick="CreateAsync"
+                   Disabled="_busy || _loadingParent"
+                   Class="run-btn">
+            @(_busy ? "Adding…" : "Add foreign key")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter]
+    private IMudDialogInstance MudDialog { get; set; } = null!;
+
+    [Parameter]
+    public string Table { get; set; } = "";
+
+    [Parameter]
+    public IReadOnlyList<ColumnSchemaInfo> Columns { get; set; } = [];
+
+    /// <summary>The tables of the database, this one included, since a self-reference is legal.</summary>
+    [Parameter]
+    public IReadOnlyList<string> Tables { get; set; } = [];
+
+    private string _table = "";
+    private string _name = "";
+    private string? _referencedTable;
+    private IReadOnlyList<ColumnSchemaInfo> _columns = [];
+    private IReadOnlyList<string> _tables = [];
+    private IReadOnlyList<ColumnSchemaInfo> _parentColumns = [];
+    private readonly List<ColumnPair> _pairs = [new ColumnPair()];
+    private string _onDelete = SqlForeignKeyActions.NoAction;
+    private string _onUpdate = SqlForeignKeyActions.NoAction;
+    private bool _loadingParent;
+    private string? _error;
+    private bool _busy;
+
+    protected override void OnInitialized()
+    {
+        _table = Table;
+        _columns = Columns;
+        _tables = Tables;
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    /// <summary>
+    /// Loads the parent's columns and proposes one pair per primary-key column, matched by name to a
+    /// column of this table where one exists. The user can change every pair.
+    /// </summary>
+    private async Task OnReferencedTableChangedAsync(string table)
+    {
+        _referencedTable = table;
+        _parentColumns = [];
+        _error = null;
+
+        if (string.IsNullOrWhiteSpace(table))
+            return;
+
+        _loadingParent = true;
+        try
+        {
+            _parentColumns = string.Equals(table, _table, StringComparison.OrdinalIgnoreCase)
+                ? _columns
+                : await Schema.ListColumnsAsync(table);
+
+            List<ColumnSchemaInfo> keys = _parentColumns.Where(c => c.IsPrimaryKey).ToList();
+            if (keys.Count > 0)
+            {
+                _pairs.Clear();
+                foreach (ColumnSchemaInfo key in keys)
+                {
+                    string? match = _columns
+                        .Select(c => c.Name)
+                        .FirstOrDefault(n => n.Equals(key.Name, StringComparison.OrdinalIgnoreCase)
+                            || n.Equals($"{table}_{key.Name}", StringComparison.OrdinalIgnoreCase));
+                    _pairs.Add(new ColumnPair { Column = match, ReferencedColumn = key.Name });
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = $"Could not read the columns of '{table}': {ex.Message}";
+        }
+        finally
+        {
+            _loadingParent = false;
+        }
+    }
+
+    private string DefaultName()
+    {
+        List<string> cols = _pairs.Select(p => p.Column).OfType<string>().ToList();
+        return cols.Count == 0 ? "{table}_{column}_fkey" : $"{_table}_{string.Join("_", cols)}_fkey";
+    }
+
+    private string? Preview() => TryBuild(out string? sql, out _) ? sql : null;
+
+    private bool TryBuild(out string? sql, out string? error)
+    {
+        sql = null;
+        error = null;
+
+        if (string.IsNullOrWhiteSpace(_referencedTable))
+        {
+            error = "Pick the referenced table.";
+            return false;
+        }
+
+        if (_pairs.Any(p => string.IsNullOrWhiteSpace(p.Column) || string.IsNullOrWhiteSpace(p.ReferencedColumn)))
+        {
+            error = "Every pair needs a column and a referenced column.";
+            return false;
+        }
+
+        if (_pairs.Select(p => p.Column!).Distinct(StringComparer.OrdinalIgnoreCase).Count() != _pairs.Count)
+        {
+            error = "A column can appear only once.";
+            return false;
+        }
+
+        try
+        {
+            ForeignKeyDefinition foreignKey = new(
+                string.IsNullOrWhiteSpace(_name) ? null : _name.Trim(),
+                _pairs.Select(p => p.Column!).ToList(),
+                _referencedTable,
+                _pairs.Select(p => p.ReferencedColumn!).ToList(),
+                _onDelete,
+                _onUpdate);
+
+            sql = SqlBuilder.BuildAddForeignKey(_table, foreignKey);
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            return false;
+        }
+
+        return true;
+    }
+
+    private async Task CreateAsync()
+    {
+        _error = null;
+
+        if (!TryBuild(out string? sql, out string? error))
+        {
+            _error = error;
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            QueryResultModel result = await Queries.ExecuteAsync(sql!);
+            if (!result.Success)
+            {
+                _error = result.ErrorMessage ?? "Add foreign key failed.";
+                return;
+            }
+
+            Snackbar.Add($"Foreign key added to '{_table}'.", Severity.Success);
+            MudDialog.Close(DialogResult.Ok(true));
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private sealed class ColumnPair
+    {
+        public string? Column { get; set; }
+        public string? ReferencedColumn { get; set; }
+    }
+}
