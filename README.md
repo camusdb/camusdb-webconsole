@@ -377,6 +377,9 @@ connection footer showing endpoint, protocol, database, identity, and server ver
 - Multi-tab queries with per-tab titles, execution timings, and cancellable runs
 - Result grid with type-aware cell styling (`NULL`, numbers, booleans, timestamps, blobs as hex) and a
   row-cap warning when the result was truncated at `MaxRows`
+- `INSERT … RETURNING` shows the returned rows in the grid, with the inserted-row count
+- A `NUMERIC` cell shows its exact text, all 38 digits. JSON export writes it as a string, as the
+  server does
 
 ### Schema browser
 
@@ -392,13 +395,19 @@ SEQUENCES`) are listed after its tables; hover one to see its start, increment, 
 - **Right-click a database** → *Create a Table* (column name/type/`NOT NULL`/PK builder) or *Drop
   Database* (confirmation required)
 - **Right-click a table** → *Edit/View Data*, *Drop Table* (confirmation required), *Export Table*,
-  *Add an Index* (pick columns, optionally `UNIQUE`), or *Add a Foreign Key* (pick the parent table,
+  *Add a Column*, *Add an Index* (pick columns, optionally `UNIQUE`), or *Add a Foreign Key* (pick the parent table,
   then one or more column pairs; the dialog proposes the parent's primary key). The server checks
   every existing row first, so a row without a parent fails the statement with `CADB0304`
 - **Right-click a foreign key** → *Drop Constraint* (confirmation required). An index that the
   constraint created goes with it
 - **Right-click a sequence** → *Show Create Sequence* or *Drop Sequence* (confirmation required)
 - In *Create a Table*, an `INT64` column accepts `nextval('seq')` as its default
+- In *Create a Table*, a `NUMERIC` column takes a decimal default such as `9.99`, written as the
+  typed literal `NUMERIC '9.99'`
+- *Add a Column* runs `ALTER TABLE … ADD COLUMN` with a type, a default, a comment and `NOT NULL`.
+  Existing rows get a constant default; a function default such as `now()` applies to new rows only.
+  So a `NOT NULL` column needs a constant default. The dialog does not offer `nextval()`, because the
+  server does not keep that default on an added column
 - In *Create a Table*, *Add foreign key* adds a single-column foreign key to an existing table, or to
   the new table itself. An empty *Referenced column* references the parent's primary key. For a
   composite key, use *Add a Foreign Key* after the table exists
@@ -415,6 +424,8 @@ result, which turns on per-row **Edit** and **Delete** actions (also on right-cl
   is built
 - `UPDATE` and `DELETE` are keyed on the primary key, so both actions are disabled with a *Primary key
   required* hint on tables without one
+- A `NUMERIC` value is written as `NUMERIC '…'`, in `SET` and in the primary-key `WHERE`. A bare
+  decimal is a `FLOAT64` literal, and a `NUMERIC` compares with a float as a double
 - The grid re-runs its query after a successful edit or delete
 
 ### Export

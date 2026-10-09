@@ -20,6 +20,8 @@ public static class SqlBuilder
         "INT",
         "FLOAT64",
         "DOUBLE",
+        "FLOAT32",
+        "NUMERIC",
         "STRING",
         "BOOL",
         "UUID",
@@ -38,15 +40,15 @@ public static class SqlBuilder
     {
         "ADD", "ALTER", "ANALYZE", "ANCESTORS", "AND", "ARRAY", "AS", "ASC", "BEGIN", "BETWEEN",
         "BLOB", "BOOL", "BOOLEAN", "BRANCH", "BRANCHES", "BY", "BYTES", "CASE", "CAST", "CHAR",
-        "CHECK", "COLUMN", "COLUMNS", "COMMENT", "COMMIT", "CONSTRAINT", "CREATE", "DATABASE",
-        "DATABASES", "DATE", "DATETIME", "DEFAULT", "DEFERRABLE", "DELETE", "DESC", "DESCRIBE",
+        "CHECK", "COLUMN", "COLUMNS", "COMMENT", "COMMIT", "CONSTRAINT", "CREATE", "CROSS", "DATABASE",
+        "DATABASES", "DATE", "DATETIME", "DECIMAL", "DEFAULT", "DEFERRABLE", "DELETE", "DESC", "DESCRIBE",
         "DISTINCT", "DOUBLE", "DROP", "ELSE", "END", "EVICT", "EXISTS", "EXPLAIN", "FALSE", "FLOAT",
         "FLOAT32", "FLOAT64", "FOR", "FORCE", "FOREIGN", "FROM", "GRANT", "GRANTS", "GROUP", "GUID",
         "HAVING", "IDENTIFIED", "IF", "ILIKE", "IN", "INCLUDE", "INDEX", "INDEXES", "INITIALLY",
-        "INNER", "INSERT", "INT", "INT64", "INTEGER", "INTO", "IS", "JOIN", "KEY", "LIKE", "LIMIT",
-        "MATERIALIZED", "NOT", "NULL", "OBJECT_ID", "OFFSET", "OID", "ON", "OR", "ORDER", "ORPHAN",
-        "PRIMARY", "PRIVILEGES", "REAL", "REFERENCES", "REFRESH", "RELINK", "RENAME", "RESET",
-        "REVOKE", "ROLLBACK",
+        "INNER", "INSERT", "INT", "INT64", "INTEGER", "INTO", "IS", "JOIN", "KEY", "LEFT", "LIKE",
+        "LIMIT", "MATERIALIZED", "NOT", "NULL", "NUMERIC", "OBJECT_ID", "OFFSET", "OID", "ON", "OR",
+        "ORDER", "ORPHAN", "OUTER", "PRIMARY", "PRIVILEGES", "REAL", "REFERENCES", "REFRESH", "RELINK",
+        "RENAME", "RESET", "RETURNING", "REVOKE", "RIGHT", "ROLLBACK",
         "SELECT", "SEQUENCE", "SEQUENCES", "SET", "SHOW", "SMALLINT", "START", "STRING", "TABLE",
         "TABLES", "TEXT", "THEN", "TIMESTAMP", "TO", "TRANSACTION", "TRUE", "TRUNCATE", "UNIQUE",
         "UPDATE", "USER", "UUID", "VALUES", "VARCHAR", "VIEW", "VIEWS", "WHEN", "WHERE", "WITH",
@@ -106,7 +108,9 @@ public static class SqlBuilder
         return value switch
         {
             bool b => b ? "TRUE" : "FALSE",
-            sbyte or byte or short or ushort or int or uint or long or ulong or float or double or decimal
+            NumericText n => NumericLiteral(n.Text),
+            decimal m => NumericLiteral(m.ToString(CultureInfo.InvariantCulture)),
+            sbyte or byte or short or ushort or int or uint or long or ulong or float or double
                 => Convert.ToString(value, CultureInfo.InvariantCulture) ?? "NULL",
             DateTime dt => $"'{dt.ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture)}'",
             DateOnly d => $"'{d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)}'",
@@ -130,6 +134,12 @@ public static class SqlBuilder
             if (text is "1" or "0")
                 return text == "1" ? "TRUE" : "FALSE";
             return QuoteString(text);
+        }
+
+        if (IsDecimalType(type))
+        {
+            string trimmed = text.Trim();
+            return IsValidNumericLiteral(trimmed) ? NumericLiteral(trimmed) : QuoteString(text);
         }
 
         if (IsNumericType(type))
@@ -203,18 +213,7 @@ public static class SqlBuilder
             if (i > 0)
                 sb.Append(", ");
 
-            ColumnDefinition col = columns[i];
-            sb.Append(QuoteIdent(col.Name)).Append(' ').Append(col.Type.Trim());
-
-            if (col.NotNull)
-                sb.Append(" NOT NULL");
-
-            // The parentheses are not optional: the grammar is DEFAULT LPAREN default_expr RPAREN.
-            if (!string.IsNullOrWhiteSpace(col.DefaultExpression))
-                sb.Append(" DEFAULT(").Append(col.DefaultExpression).Append(')');
-
-            if (col.Comment is not null)
-                sb.Append(" COMMENT ").Append(QuoteString(col.Comment));
+            AppendColumn(sb, columns[i]);
         }
 
         List<string> pk = columns.Where(c => c.PrimaryKey).Select(c => QuoteIdent(c.Name)).ToList();
@@ -230,6 +229,44 @@ public static class SqlBuilder
             sb.Append(" COMMENT ").Append(QuoteString(tableComment));
 
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// <c>ALTER TABLE t ADD COLUMN c type [NOT NULL] [DEFAULT(…)] [COMMENT '…']</c>. The column
+    /// clauses are the ones CREATE TABLE takes. A primary key and a foreign key are separate schema
+    /// changes, so the server refuses them here.
+    /// </summary>
+    public static string BuildAddColumn(string table, ColumnDefinition column)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(table);
+        ArgumentException.ThrowIfNullOrWhiteSpace(column.Name);
+        ArgumentException.ThrowIfNullOrWhiteSpace(column.Type);
+        if (column.PrimaryKey)
+            throw new ArgumentException("ADD COLUMN cannot declare a primary key.", nameof(column));
+
+        StringBuilder sb = new();
+        sb.Append("ALTER TABLE ").Append(QuoteIdent(table)).Append(" ADD COLUMN ");
+        AppendColumn(sb, column);
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// One column definition, in the clause order SHOW CREATE TABLE renders: type, NOT NULL,
+    /// DEFAULT, COMMENT.
+    /// </summary>
+    private static void AppendColumn(StringBuilder sb, ColumnDefinition col)
+    {
+        sb.Append(QuoteIdent(col.Name)).Append(' ').Append(col.Type.Trim());
+
+        if (col.NotNull)
+            sb.Append(" NOT NULL");
+
+        // The parentheses are not optional: the grammar is DEFAULT LPAREN default_expr RPAREN.
+        if (!string.IsNullOrWhiteSpace(col.DefaultExpression))
+            sb.Append(" DEFAULT(").Append(col.DefaultExpression).Append(')');
+
+        if (col.Comment is not null)
+            sb.Append(" COMMENT ").Append(QuoteString(col.Comment));
     }
 
     /// <summary>
@@ -433,6 +470,14 @@ public static class SqlBuilder
             return false;
         }
 
+        if (IsDecimalType(type))
+        {
+            if (IsValidNumericLiteral(trimmed))
+                return true;
+            error = "Expected a decimal number, for example 12.50 or -0.001.";
+            return false;
+        }
+
         if (IsIntegerType(type))
         {
             if (IsValidIntegerLiteral(trimmed))
@@ -472,7 +517,28 @@ public static class SqlBuilder
     }
 
     public static bool IsNumericType(string? type) =>
-        IsIntegerType(type) || IsFloatType(type);
+        IsIntegerType(type) || IsFloatType(type) || IsDecimalType(type);
+
+    /// <summary>
+    /// NUMERIC and its alias DECIMAL. SHOW COLUMNS and SHOW CREATE TABLE print <c>NUMERIC</c>, and the
+    /// client reports the result column type as <c>Numeric</c>.
+    /// </summary>
+    public static bool IsDecimalType(string? type) =>
+        CanonicalType(type) == "NUMERIC";
+
+    /// <summary>
+    /// The text forms NumericMath.TryParse accepts: an optional sign, digits with an optional point,
+    /// and an optional exponent. The range is left to the server, which answers CADB0417 when a value
+    /// does not fit.
+    /// </summary>
+    public static bool IsValidNumericLiteral(string text) => NumericLiteralSyntax.IsMatch(text);
+
+    /// <summary>
+    /// The typed literal <c>NUMERIC '…'</c>. A bare <c>1.5</c> is a FLOAT64 literal: it is exact when
+    /// it is written into a NUMERIC column, but it compares with one as a double, so a WHERE built from
+    /// it can miss the row. The typed literal is exact in both places and can use an index.
+    /// </summary>
+    public static string NumericLiteral(string text) => "NUMERIC " + QuoteString(text.Trim());
 
     public static bool IsIntegerType(string? type)
     {
@@ -682,6 +748,34 @@ public static class SqlBuilder
     }
 
     /// <summary>
+    /// The DEFAULT functions a column of <paramref name="type"/> can take, for a dialog hint. The
+    /// engine demands an exact type match, so a type that no function returns has none to offer.
+    /// </summary>
+    public static string DefaultFunctionHint(string? type, bool includeNextval = true)
+    {
+        List<string> usable = DefaultFunctions
+            .Where(f => TryBuildDefaultExpression($"{f.Key}()", type, out _, out _))
+            .Select(f => $"{f.Key}()")
+            .ToList();
+
+        if (includeNextval && TryBuildDefaultExpression("nextval('seq')", type, out _, out _))
+            usable.Add("nextval('seq')");
+
+        return usable.Count == 0 ? "" : string.Join(", ", usable);
+    }
+
+    /// <summary>
+    /// True when <paramref name="expression"/>, as <see cref="TryBuildDefaultExpression"/> returned
+    /// it, is a function call. Every literal form it returns ends in a quote, a digit or a word, so a
+    /// closing parenthesis marks a call. The server evaluates such a default for each new row only.
+    /// </summary>
+    public static bool IsFunctionDefault(string? expression) =>
+        expression is not null && expression.EndsWith(')');
+
+    public static string DefaultPlaceholder(string? type) =>
+        IsNumericType(type) ? "0" : IsBoolType(type) ? "false" : "value";
+
+    /// <summary>
     /// Collapses the type spellings the lexer treats as synonyms onto one name, so a DEFAULT
     /// function's return type can be compared against a column declared as any of them.
     /// </summary>
@@ -704,6 +798,7 @@ public static class SqlBuilder
             "DATETIME" or "TIMESTAMP" => "DATETIME",
             "FLOAT64" or "DOUBLE" or "FLOAT" => "FLOAT64",
             "FLOAT32" or "REAL" => "FLOAT32",
+            "NUMERIC" or "DECIMAL" => "NUMERIC",
             "INT" or "INT64" or "INTEGER" or "SMALLINT" => "INT64",
             "STRING" or "VARCHAR" or "CHAR" or "TEXT" => "STRING",
             "BOOL" or "BOOLEAN" => "BOOL",
@@ -711,6 +806,10 @@ public static class SqlBuilder
             _ => t.ToUpperInvariant(),
         };
     }
+
+    private static readonly Regex NumericLiteralSyntax = new(
+        @"^[+-]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][+-]?[0-9]+)?$",
+        RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     private static readonly Regex FunctionCallSyntax = new(
         @"^[A-Za-z_][A-Za-z0-9_]*\s*\(\s*\)$",

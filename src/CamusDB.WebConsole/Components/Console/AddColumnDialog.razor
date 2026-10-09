@@ -1,0 +1,193 @@
+@inject QueryExecutionService Queries
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <TitleContent>
+        <MudText Typo="Typo.h6">Add column</MudText>
+    </TitleContent>
+    <DialogContent>
+        <MudStack Spacing="3" Class="mt-2">
+            <MudText Typo="Typo.caption" Class="mud-text-secondary">Table: @_table</MudText>
+            <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Start">
+                <MudTextField @bind-Value="_name"
+                              Label="Column name"
+                              Variant="Variant.Outlined"
+                              Margin="Margin.Dense"
+                              Immediate="true"
+                              Style="flex:1; min-width:150px;" />
+                <MudSelect T="string"
+                           @bind-Value="_type"
+                           Label="Type"
+                           Variant="Variant.Outlined"
+                           Margin="Margin.Dense"
+                           Style="width:130px;">
+                    @foreach (string t in SqlBuilder.ColumnTypes)
+                    {
+                        <MudSelectItem Value="@t">@t</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudStack>
+            <MudTextField @bind-Value="_default"
+                          Label="Default"
+                          Placeholder="@SqlBuilder.DefaultPlaceholder(_type)"
+                          HelperText="@DefaultHelperText()"
+                          Variant="Variant.Outlined"
+                          Margin="Margin.Dense"
+                          Immediate="true" />
+            <MudTextField @bind-Value="_comment"
+                          Label="Comment (optional)"
+                          Variant="Variant.Outlined"
+                          Margin="Margin.Dense"
+                          Immediate="true"
+                          MaxLength="SqlBuilder.MaxCommentLength" />
+            <MudCheckBox @bind-Value="_notNull" Label="NOT NULL" Dense="true" />
+
+            <MudField Label="SQL preview" Variant="Variant.Outlined">
+                <pre class="sql-preview">@Preview()</pre>
+            </MudField>
+
+            @if (!string.IsNullOrEmpty(_error))
+            {
+                <MudAlert Severity="Severity.Error" Dense="true">@_error</MudAlert>
+            }
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel" Disabled="_busy">Cancel</MudButton>
+        <MudButton Color="Color.Primary"
+                   Variant="Variant.Filled"
+                   OnClick="AddAsync"
+                   Disabled="_busy"
+                   Class="run-btn">
+            @(_busy ? "Adding…" : "Add column")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter]
+    private IMudDialogInstance MudDialog { get; set; } = null!;
+
+    [Parameter]
+    public string Table { get; set; } = "";
+
+    [Parameter]
+    public IReadOnlyList<ColumnSchemaInfo> Columns { get; set; } = [];
+
+    private string _table = "";
+    private string _name = "";
+    private string _type = "STRING";
+    private string _default = "";
+    private string _comment = "";
+    private bool _notNull;
+    private string? _error;
+    private bool _busy;
+
+    protected override void OnInitialized() => _table = Table;
+
+    private void Cancel() => MudDialog.Cancel();
+
+    /// <summary>
+    /// nextval() is left out: the server accepts it in ADD COLUMN but does not keep the default.
+    /// </summary>
+    private string DefaultHelperText()
+    {
+        string functions = SqlBuilder.DefaultFunctionHint(_type, includeNextval: false);
+        string note = _notNull
+            ? "Required for NOT NULL: existing rows get this value."
+            : "Existing rows get this value.";
+
+        return functions.Length == 0 ? note : $"{note} Functions ({functions}) apply to new rows only.";
+    }
+
+    private string Preview() => TryBuild(out string? sql, out string? error) ? sql! : $"-- {error} --";
+
+    /// <summary>
+    /// Validates the form and renders the statement, or reports the first problem. Shared by the
+    /// preview (which discards the error) and Add (which shows it).
+    /// </summary>
+    private bool TryBuild(out string? sql, out string? error)
+    {
+        sql = null;
+        error = null;
+
+        string name = _name.Trim();
+        if (name.Length == 0)
+        {
+            error = "Column name is required.";
+            return false;
+        }
+
+        if (Columns.Any(c => c.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
+        {
+            error = $"Table '{_table}' already has a column '{name}'.";
+            return false;
+        }
+
+        if (!SqlBuilder.TryBuildDefaultExpression(_default, _type, out string? defaultExpr, out error))
+            return false;
+
+        if (defaultExpr is not null && defaultExpr.StartsWith("nextval(", StringComparison.Ordinal))
+        {
+            error = "ADD COLUMN cannot take a nextval() default. Add the column, then fill it with an UPDATE.";
+            return false;
+        }
+
+        // The server accepts NOT NULL with no default, or with a function default, and leaves NULL in
+        // every existing row. A constant default is the only form that fills those rows.
+        if (_notNull && (defaultExpr is null or "NULL" || SqlBuilder.IsFunctionDefault(defaultExpr)))
+        {
+            error = "A NOT NULL column needs a constant default, because existing rows get that value.";
+            return false;
+        }
+
+        string? comment = string.IsNullOrEmpty(_comment) ? null : _comment;
+        if (!SqlBuilder.TryValidateComment(comment, out error))
+            return false;
+
+        try
+        {
+            sql = SqlBuilder.BuildAddColumn(_table, new ColumnDefinition(name, _type, _notNull, false, defaultExpr, comment));
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            return false;
+        }
+
+        return true;
+    }
+
+    private async Task AddAsync()
+    {
+        _error = null;
+
+        if (!TryBuild(out string? sql, out string? error))
+        {
+            _error = error;
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            QueryResultModel result = await Queries.ExecuteAsync(sql!);
+            if (!result.Success)
+            {
+                _error = result.ErrorMessage ?? "Add column failed.";
+                return;
+            }
+
+            Snackbar.Add($"Column '{_name.Trim()}' added to '{_table}'.", Severity.Success);
+            MudDialog.Close(DialogResult.Ok(true));
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

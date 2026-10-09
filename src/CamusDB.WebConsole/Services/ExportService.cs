@@ -121,6 +121,9 @@ public sealed class ExportService
         TimeOnly t => t.ToString("HH:mm:ss.fffffff", CultureInfo.InvariantCulture),
         byte[] bytes => Convert.ToHexString(bytes),
         Guid g => g.ToString("D"),
+        // A JSON string, as the server sends it: a JSON number is a double to most readers, and a
+        // NUMERIC has 38 digits.
+        NumericText n => n.Text,
         _ => value,
     };
 

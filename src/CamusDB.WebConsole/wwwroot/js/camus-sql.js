@@ -7,7 +7,14 @@
  * (CamusDB.Core/SQLParser/SQLParser.Language.analyzer.lex) and scalar-function registry, so the
  * editor colors exactly what the engine parses — no more and no less.
  *
- * Deliberately absent: UNION, LEFT/RIGHT/OUTER/CROSS JOIN. CamusDB has no tokens for them.
+ * Deliberately absent: UNION and FULL [OUTER] JOIN. The lexer has no token for UNION or FULL.
+ *
+ * LEFT, RIGHT, OUTER and CROSS are reserved words for LEFT [OUTER] JOIN, RIGHT [OUTER] JOIN and
+ * CROSS JOIN. RETURNING is reserved too: it starts the RETURNING list of an INSERT. A column with
+ * one of these names must be backticked.
+ *
+ * NUMERIC and DECIMAL are one type token. `NUMERIC '1.5'` is the typed literal, so it colors as a
+ * type followed by a string.
  *
  * ANY, SOME and ALL are not keywords either. The engine parses a quantified comparison
  * (`x = ANY (SELECT ...)`) as a call to a function of that name, so they are colored as operators
@@ -57,19 +64,19 @@
             'ADD', 'ALTER', 'ANALYZE', 'ANCESTORS', 'AS', 'ASC',
             'BEGIN', 'BRANCH', 'BRANCHES', 'BY', 'CASE', 'CAST',
             'CHECK', 'COLUMN', 'COLUMNS', 'COMMENT', 'COMMIT', 'CONSTRAINT',
-            'CREATE', 'DATABASE', 'DATABASES', 'DEFAULT', 'DEFERRABLE', 'DELETE',
-            'DESC', 'DESCRIBE', 'DISTINCT', 'DROP', 'ELSE', 'END',
-            'EVICT', 'EXPLAIN', 'FALSE', 'FOR', 'FORCE', 'FOREIGN',
-            'FROM', 'GRANT', 'GRANTS', 'GROUP', 'HAVING', 'IDENTIFIED',
-            'IF', 'INCLUDE', 'INDEX', 'INDEXES', 'INITIALLY', 'INNER',
-            'INSERT', 'INTO', 'JOIN', 'KEY', 'LIMIT', 'MATERIALIZED',
-            'NULL', 'OFFSET', 'ON', 'ORDER', 'ORPHAN', 'PRIMARY',
-            'PRIVILEGES', 'REFERENCES', 'REFRESH', 'RELINK', 'RENAME', 'RESET',
-            'REVOKE', 'ROLLBACK', 'SELECT', 'SEQUENCE', 'SEQUENCES', 'SET',
-            'SHOW', 'START', 'TABLE', 'TABLES', 'THEN', 'TO',
-            'TRANSACTION', 'TRUE', 'TRUNCATE', 'UNIQUE', 'UPDATE', 'USER',
-            'VALUES', 'VIEW', 'VIEWS', 'WHEN', 'WHERE', 'WITH',
-            'WITHOUT',
+            'CREATE', 'CROSS', 'DATABASE', 'DATABASES', 'DEFAULT', 'DEFERRABLE',
+            'DELETE', 'DESC', 'DESCRIBE', 'DISTINCT', 'DROP', 'ELSE',
+            'END', 'EVICT', 'EXPLAIN', 'FALSE', 'FOR', 'FORCE',
+            'FOREIGN', 'FROM', 'GRANT', 'GRANTS', 'GROUP', 'HAVING',
+            'IDENTIFIED', 'IF', 'INCLUDE', 'INDEX', 'INDEXES', 'INITIALLY',
+            'INNER', 'INSERT', 'INTO', 'JOIN', 'KEY', 'LEFT',
+            'LIMIT', 'MATERIALIZED', 'NULL', 'OFFSET', 'ON', 'ORDER',
+            'ORPHAN', 'OUTER', 'PRIMARY', 'PRIVILEGES', 'REFERENCES', 'REFRESH',
+            'RELINK', 'RENAME', 'RESET', 'RETURNING', 'REVOKE', 'RIGHT',
+            'ROLLBACK', 'SELECT', 'SEQUENCE', 'SEQUENCES', 'SET', 'SHOW',
+            'START', 'TABLE', 'TABLES', 'THEN', 'TO', 'TRANSACTION',
+            'TRUE', 'TRUNCATE', 'UNIQUE', 'UPDATE', 'USER', 'VALUES',
+            'VIEW', 'VIEWS', 'WHEN', 'WHERE', 'WITH', 'WITHOUT',
         ],
 
         operators: [
@@ -79,10 +86,10 @@
 
         builtinTypes: [
             'ARRAY', 'BLOB', 'BOOL', 'BOOLEAN', 'BYTES', 'CHAR',
-            'DATE', 'DATETIME', 'DOUBLE', 'FLOAT', 'FLOAT32', 'FLOAT64',
-            'GUID', 'INT', 'INT64', 'INTEGER', 'OBJECT_ID', 'OID',
-            'REAL', 'SMALLINT', 'STRING', 'TEXT', 'TIMESTAMP', 'UUID',
-            'VARCHAR',
+            'DATE', 'DATETIME', 'DECIMAL', 'DOUBLE', 'FLOAT', 'FLOAT32',
+            'FLOAT64', 'GUID', 'INT', 'INT64', 'INTEGER', 'NUMERIC',
+            'OBJECT_ID', 'OID', 'REAL', 'SMALLINT', 'STRING', 'TEXT',
+            'TIMESTAMP', 'UUID', 'VARCHAR',
         ],
 
         // Registered scalar functions plus the five aggregates. Aliases count: the registry resolves
@@ -113,7 +120,7 @@
             'SETVAL', 'SHA1', 'SHA256', 'SHA512', 'SIGN', 'SQRT',
             'STARTS_WITH', 'STR_ID', 'SUBSTRING', 'SUM', 'TO_BOOL', 'TO_BYTES',
             'TO_DATE', 'TO_DATETIME', 'TO_FLOAT32', 'TO_FLOAT64', 'TO_ID', 'TO_INT64',
-            'TO_STRING', 'TRIM', 'UNIX_TIMESTAMP', 'UPPER', 'VECTOR_DIMS',
+            'TO_STRING', 'TRIM', 'TRUNC', 'UNIX_TIMESTAMP', 'UPPER', 'VECTOR_DIMS',
         ],
 
         // Quantifiers of a comparison: `x > ALL (SELECT ...)`. See the header comment.

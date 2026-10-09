@@ -42,8 +42,8 @@
                     </MudSelect>
                     <MudTextField @bind-Value="col.Default"
                                   Label="Default"
-                                  Placeholder="@DefaultPlaceholder(col.Type)"
-                                  HelperText="@DefaultHint(col.Type)"
+                                  Placeholder="@SqlBuilder.DefaultPlaceholder(col.Type)"
+                                  HelperText="@SqlBuilder.DefaultFunctionHint(col.Type)"
                                   Variant="Variant.Outlined"
                                   Margin="Margin.Dense"
                                   Immediate="true"
@@ -237,26 +237,6 @@
             // The column stays "primary key", which needs no column list.
         }
     }
-
-    /// <summary>
-    /// The DEFAULT functions this column's type can actually take. The engine demands an exact
-    /// type match, so a column of a type no function returns simply has none to offer.
-    /// </summary>
-    private static string DefaultHint(string type)
-    {
-        List<string> usable = SqlBuilder.DefaultFunctions
-            .Where(f => SqlBuilder.TryBuildDefaultExpression($"{f.Key}()", type, out _, out _))
-            .Select(f => $"{f.Key}()")
-            .ToList();
-
-        if (SqlBuilder.TryBuildDefaultExpression("nextval('seq')", type, out _, out _))
-            usable.Add("nextval('seq')");
-
-        return usable.Count == 0 ? "" : string.Join(", ", usable);
-    }
-
-    private static string DefaultPlaceholder(string type) =>
-        SqlBuilder.IsNumericType(type) ? "0" : SqlBuilder.IsBoolType(type) ? "false" : "value";
 
     private string? Preview()
     {

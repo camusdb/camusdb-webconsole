@@ -291,7 +291,7 @@ else
         if (value is bool)
             return "cell-bool";
 
-        if (value is sbyte or byte or short or ushort or int or uint or long or ulong or float or double or decimal)
+        if (value is sbyte or byte or short or ushort or int or uint or long or ulong or float or double or decimal or NumericText)
             return "cell-number";
 
         return "";

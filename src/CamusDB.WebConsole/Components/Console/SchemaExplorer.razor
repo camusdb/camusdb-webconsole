@@ -143,6 +143,10 @@
                                                          OnClick="() => ExportTableAsync(db, table)">
                                                 Export Table
                                             </MudMenuItem>
+                                            <MudMenuItem Icon="@Icons.Material.Filled.ViewColumn"
+                                                         OnClick="() => AddColumnAsync(db, table)">
+                                                Add a Column
+                                            </MudMenuItem>
                                             <MudMenuItem Icon="@Icons.Material.Filled.Key"
                                                          OnClick="() => AddIndexAsync(db, table)">
                                                 Add an Index
@@ -765,6 +769,35 @@
             };
 
             await DialogService.ShowAsync<ExportTableDialog>("Export table", parameters, DialogOptions);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    private async Task AddColumnAsync(DbEntry db, TableEntry table)
+    {
+        try
+        {
+            await Session.ChangeDatabaseAsync(db.Name, notify: true);
+            if (!table.Loaded)
+                await LoadTableDetailsAsync(db, table);
+
+            var parameters = new DialogParameters<AddColumnDialog>
+            {
+                { x => x.Table, table.Name },
+                { x => x.Columns, table.Columns.ToList() },
+            };
+
+            IDialogReference dialog = await DialogService.ShowAsync<AddColumnDialog>("Add column", parameters, DialogOptions);
+            DialogResult? result = await dialog.Result;
+            if (result is { Canceled: false })
+            {
+                table.Loaded = false;
+                if (table.Expanded)
+                    await LoadTableDetailsAsync(db, table);
+            }
         }
         catch (Exception ex)
         {
