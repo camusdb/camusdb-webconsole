@@ -11,6 +11,10 @@ public sealed class QueryExecutionService
         @"^\s*(SELECT|SHOW|EXPLAIN|WITH)\b",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
+    private static readonly Regex ExplainPrefix = new(
+        @"^\s*EXPLAIN\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
     private static readonly Regex InsertPrefix = new(
         @"^\s*INSERT\b",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
@@ -81,12 +85,12 @@ public sealed class QueryExecutionService
             await using CamusCommand command = connection.CreateCamusCommand(sql);
 
             if (IsResultSetStatement(sql))
-                return await ExecuteReaderAsync(command, total, insertReturning: false, cancellationToken).ConfigureAwait(false);
+                return await ExecuteReaderAsync(command, total, insertReturning: false, explain: IsExplainStatement(sql), cancellationToken).ConfigureAwait(false);
 
             // ExecuteNonQuery asks the server to discard the RETURNING rows, so the reader path is the
             // one that shows them.
             if (IsInsertReturning(sql))
-                return await ExecuteReaderAsync(command, total, insertReturning: true, cancellationToken).ConfigureAwait(false);
+                return await ExecuteReaderAsync(command, total, insertReturning: true, explain: false, cancellationToken).ConfigureAwait(false);
 
             return await ExecuteNonQueryAsync(command, total, cancellationToken).ConfigureAwait(false);
         }
@@ -129,6 +133,7 @@ public sealed class QueryExecutionService
         CamusCommand command,
         Stopwatch total,
         bool insertReturning,
+        bool explain,
         CancellationToken cancellationToken)
     {
         int maxRows = _session.MaxRows;
@@ -211,6 +216,9 @@ public sealed class QueryExecutionService
             ExecuteDuration = execute.Elapsed,
             TotalDuration = total.Elapsed,
             Message = message,
+            // A table can have columns called node and detail, so the column shape alone does not
+            // make a result a plan; the statement has to be an EXPLAIN as well.
+            Plan = explain ? QueryPlanParser.TryParse(columns, rows) : null,
         };
     }
 
@@ -236,6 +244,8 @@ public sealed class QueryExecutionService
     }
 
     private static bool IsResultSetStatement(string sql) => ResultSetPrefix.IsMatch(sql);
+
+    private static bool IsExplainStatement(string sql) => ExplainPrefix.IsMatch(sql);
 
     private static bool IsInsertReturning(string sql) =>
         InsertPrefix.IsMatch(sql) && HasReturningKeyword(sql);

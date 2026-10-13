@@ -381,6 +381,30 @@ connection footer showing endpoint, protocol, database, identity, and server ver
 - A `NUMERIC` cell shows its exact text, all 38 digits. JSON export writes it as a string, as the
   server does
 
+### Query plans
+
+The result of an `EXPLAIN`, `EXPLAIN (LOGICAL)`, `EXPLAIN (PHYSICAL)` or `EXPLAIN (ANALYZE)` statement
+gets a **Table | Flow** switch in the results toolbar. *Table* is the plain grid of plan rows. *Flow*
+draws the plan as a diagram that reads from top to bottom: the source operator first, each operator
+below the one that feeds it, and the result last.
+
+- Each operator is a card with its family (source, join, filter, aggregate, sort, limit, output), a
+  one-line description, the server's detail text, and the table or index it reads
+- An edge shows the rows that its upper operator produces: the estimate, and with `ANALYZE` the
+  measured count too. The edge gets thicker as the row count grows
+- A bar shows each operator's part of the plan's estimated cost, and *Highest cost* marks the
+  operator that costs the most
+- A join has a second input that has no row of its own in the plan. The flow shows it as a dashed box
+  beside the join, with what the detail text tells about it (its alias, its index or its subquery
+  table)
+- With `ANALYZE`, a card also shows the rows read and the KV lookups and scan entries, the summary
+  shows the measured time, and *Estimate off N×* marks an operator whose measured rows are ten times
+  the estimate or a tenth of it
+- The rows that describe the whole plan (`plan-info`, `distribution`, `cache`) are listed below the
+  diagram
+
+The console remembers the last choice, so the next plan opens in the same view.
+
 ### Schema browser
 
 The sidebar lists databases and tables via `SHOW DATABASES` / `SHOW TABLES`, expanding a table into its
@@ -442,18 +466,20 @@ User/password login or a supplied bearer token, per browser session — see
 
 ### Remembered UI state
 
-Drawer width, editor/results split, active database, user name, and all open SQL tabs (with their text)
-are persisted to `localStorage` and restored on the next visit. Passwords and tokens never are.
+Drawer width, editor/results split, active database, user name, the table or flow view for query plans,
+and all open SQL tabs (with their text) are persisted to `localStorage` and restored on the next visit.
+Passwords and tokens never are.
 
 ## Project layout
 
 ```
 src/CamusDB.WebConsole/
-  Components/Console/   # Schema tree, editor, results grid, dialogs (configure, create table,
-                        # add index, add foreign key, edit record, export, confirm)
+  Components/Console/   # Schema tree, editor, results grid, query plan flow, dialogs (configure,
+                        # create table, add index, add foreign key, edit record, export, confirm)
   Components/Layout/    # Main shell + theme
-  Services/             # Session, schema, query execution, export, preferences, SQL builder
-  Models/               # Query results, schema nodes, table data context, UI preferences
+  Services/             # Session, schema, query execution, query plan parser, export, preferences,
+                        # SQL builder
+  Models/               # Query results, query plans, schema nodes, table data context, UI preferences
   Options/              # CamusDbOptions
   wwwroot/js/           # camus-sql.js (Monaco language), download.js, storage.js
 ```

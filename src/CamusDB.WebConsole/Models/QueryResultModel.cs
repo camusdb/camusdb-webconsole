@@ -37,6 +37,9 @@ public sealed class QueryResultModel
 
     public string? Message { get; init; }
 
+    /// <summary>The plan an EXPLAIN statement returned, read from <see cref="Rows"/>. Null for every other statement.</summary>
+    public QueryPlanModel? Plan { get; init; }
+
     public static QueryResultModel Failure(string message, string? code, TimeSpan total) => new()
     {
         Success = false,

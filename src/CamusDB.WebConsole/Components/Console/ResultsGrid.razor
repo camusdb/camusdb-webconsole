@@ -1,4 +1,5 @@
 @inject QueryExecutionService Queries
+@inject ConsolePreferencesService Prefs
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
 
@@ -25,6 +26,25 @@ else
             }
         </span>
         <span>@Result.Columns.Count column@(Result.Columns.Count == 1 ? "" : "s")</span>
+        @if (Result.Plan is not null)
+        {
+            <div class="results-view-toggle" role="group" aria-label="Show the plan as">
+                <button type="button"
+                        class="@(ShowFlow ? null : "active")"
+                        aria-pressed="@(ShowFlow ? "false" : "true")"
+                        @onclick="() => SetFlowAsync(false)">
+                    <MudIcon Icon="@Icons.Material.Filled.TableRows" Size="Size.Small" />
+                    Table
+                </button>
+                <button type="button"
+                        class="@(ShowFlow ? "active" : null)"
+                        aria-pressed="@(ShowFlow ? "true" : "false")"
+                        @onclick="() => SetFlowAsync(true)">
+                    <MudIcon Icon="@Icons.Material.Filled.AccountTree" Size="Size.Small" />
+                    Flow
+                </button>
+            </div>
+        }
         @if (TableContext is not null)
         {
             <span class="results-table-badge">@TableContext.Table</span>
@@ -34,6 +54,10 @@ else
         @if (Result.Columns.Count == 0)
         {
             <div class="empty-state">Empty result set (no columns).</div>
+        }
+        else if (ShowFlow)
+        {
+            <QueryPlanFlow Plan="Result.Plan!" />
         }
         else
         {
@@ -119,6 +143,8 @@ else
     private bool ShowRowActions => TableContext is not null;
     private bool _canMutate;
 
+    private bool ShowFlow => Result?.Plan is not null && Prefs.Current.PlanAsFlow;
+
     private bool _rowMenuOpen;
     private object?[]? _menuRow;
     private double _menuX;
@@ -147,6 +173,9 @@ else
         _rowMenuOpen = false;
         _menuRow = null;
     }
+
+    /// <summary>The choice is a preference, not a property of one result, so the next EXPLAIN opens the same way.</summary>
+    private Task SetFlowAsync(bool asFlow) => Prefs.SetPlanAsFlowAsync(asFlow);
 
     private async Task EditMenuRowAsync()
     {

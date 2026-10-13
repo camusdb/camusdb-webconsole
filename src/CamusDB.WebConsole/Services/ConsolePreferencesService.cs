@@ -80,6 +80,16 @@ public sealed class ConsolePreferencesService
         await PersistAsync().ConfigureAwait(false);
     }
 
+    public async Task SetPlanAsFlowAsync(bool asFlow)
+    {
+        await EnsureLoadedAsync().ConfigureAwait(false);
+        if (_prefs.PlanAsFlow == asFlow)
+            return;
+
+        _prefs.PlanAsFlow = asFlow;
+        await PersistAsync().ConfigureAwait(false);
+    }
+
     public async Task SetDatabaseAsync(string? database)
     {
         await EnsureLoadedAsync().ConfigureAwait(false);

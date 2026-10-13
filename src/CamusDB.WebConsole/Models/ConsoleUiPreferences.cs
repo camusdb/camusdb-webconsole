@@ -17,6 +17,9 @@ public sealed class ConsoleUiPreferences
     /// </summary>
     public string? User { get; set; }
 
+    /// <summary>True when an EXPLAIN result opens as a flow diagram instead of the grid.</summary>
+    public bool PlanAsFlow { get; set; }
+
     public string? ActiveTabId { get; set; }
 
     public int TabSeq { get; set; }
