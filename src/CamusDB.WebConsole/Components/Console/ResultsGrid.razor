@@ -1,6 +1,7 @@
 @inject QueryExecutionService Queries
 @inject ConsolePreferencesService Prefs
 @inject IDialogService DialogService
+@inject IJSRuntime Js
 @inject ISnackbar Snackbar
 
 @if (Result is null)
@@ -19,13 +20,69 @@ else
 {
     <div class="results-toolbar">
         <span>
+            @if (FilterActive)
+            {
+                <text>@_view.Count.ToString("N0") of </text>
+            }
             @Result.RowsReturned.ToString("N0") row@(Result.RowsReturned == 1 ? "" : "s")
             @if (Result.Truncated)
             {
                 <text> (truncated at @Result.MaxRows.ToString("N0"))</text>
             }
+            @if (Result.HasMore)
+            {
+                <text> loaded</text>
+            }
         </span>
+        @if (Result.HasMore)
+        {
+            <button type="button"
+                    class="results-fetch-more"
+                    disabled="@Busy"
+                    title="@($"Get the next {Result.MaxRows:N0} rows")"
+                    @onclick="OnFetchMore">
+                <MudIcon Icon="@Icons.Material.Filled.ExpandMore" Size="Size.Small" />
+                Fetch more
+            </button>
+        }
         <span>@Result.Columns.Count column@(Result.Columns.Count == 1 ? "" : "s")</span>
+        @if (Result.Columns.Count > 0 && !ShowFlow)
+        {
+            @if (ServerSide)
+            {
+                <div class="results-filter" title="A SQL condition. Press Enter to run the query again with it.">
+                    <span class="results-filter-label">WHERE</span>
+                    <input type="text"
+                           placeholder="condition, e.g. id > 10"
+                           aria-label="Filter rows with a WHERE condition"
+                           spellcheck="false"
+                           disabled="@Busy"
+                           @bind="_whereDraft"
+                           @bind:event="oninput"
+                           @onkeydown="OnWhereKeyDownAsync" />
+                    @if (!string.IsNullOrWhiteSpace(ServerFilter) || !string.IsNullOrWhiteSpace(_whereDraft))
+                    {
+                        <button type="button" title="Remove the filter" disabled="@Busy" @onclick="ClearWhereAsync">×</button>
+                    }
+                </div>
+            }
+            else
+            {
+                <div class="results-filter" title="Shows only the loaded rows that contain this text.">
+                    <MudIcon Icon="@Icons.Material.Filled.FilterList" Size="Size.Small" />
+                    <input type="text"
+                           placeholder="Filter loaded rows"
+                           aria-label="Filter the loaded rows"
+                           spellcheck="false"
+                           value="@_quickFilter"
+                           @oninput="OnQuickFilterInput" />
+                    @if (_quickFilter.Length > 0)
+                    {
+                        <button type="button" title="Clear the filter" @onclick="ClearQuickFilter">×</button>
+                    }
+                </div>
+            }
+        }
         @if (Result.Plan is not null)
         {
             <div class="results-view-toggle" role="group" aria-label="Show the plan as">
@@ -49,6 +106,50 @@ else
         {
             <span class="results-table-badge">@TableContext.Table</span>
         }
+        @if (Result.Columns.Count > 0)
+        {
+            <MudMenu AnchorOrigin="Origin.BottomRight"
+                     TransformOrigin="Origin.TopRight"
+                     Dense="true"
+                     Class="results-export"
+                     AriaLabel="Export the result">
+                <ActivatorContent>
+                    <button type="button"
+                            class="results-toolbar-btn"
+                            disabled="@(_view.Count == 0)"
+                            title="Download the rows in the grid as CSV or JSON"
+                            @onclick="context.ToggleAsync">
+                        <MudIcon Icon="@Icons.Material.Filled.Download" Size="Size.Small" />
+                        Export
+                    </button>
+                </ActivatorContent>
+                <ChildContent>
+                    <MudMenuItem Icon="@Icons.Material.Filled.TableChart" OnClick="() => ExportAsync(ExportFormat.Csv)">
+                        CSV — @RowsLabel(_view.Count)
+                    </MudMenuItem>
+                    <MudMenuItem Icon="@Icons.Material.Filled.DataObject" OnClick="() => ExportAsync(ExportFormat.Json)">
+                        JSON — @RowsLabel(_view.Count)
+                    </MudMenuItem>
+                    @if (FilterActive || Result.HasMore || Result.Truncated)
+                    {
+                        <div class="results-export-note">
+                            @if (FilterActive)
+                            {
+                                <div>Only the rows that match the filter.</div>
+                            }
+                            @if (Result.HasMore)
+                            {
+                                <div>Only the loaded rows. Click Fetch more to load more rows first.</div>
+                            }
+                            else if (Result.Truncated)
+                            {
+                                <div>The result stopped at @Result.MaxRows.ToString("N0") rows.</div>
+                            }
+                        </div>
+                    }
+                </ChildContent>
+            </MudMenu>
+        }
     </div>
     <div class="results-grid-wrap">
         @if (Result.Columns.Count == 0)
@@ -64,10 +165,22 @@ else
             <table class="results-table">
                 <thead>
                     <tr>
-                        @foreach (QueryColumn col in Result.Columns)
+                        @for (int c = 0; c < Result.Columns.Count; c++)
                         {
-                            <th>
-                                @col.Name
+                            int index = c;
+                            QueryColumn col = Result.Columns[index];
+                            string? direction = SortDirection(index);
+                            <th class="sortable"
+                                title="@SortHint(index)"
+                                aria-sort="@(direction switch { "asc" => "ascending", "desc" => "descending", _ => "none" })"
+                                @onclick="() => OnHeaderClickAsync(index)">
+                                <span class="col-name">
+                                    @col.Name
+                                    @if (direction is not null)
+                                    {
+                                        <span class="col-sort">@(direction == "asc" ? "▲" : "▼")</span>
+                                    }
+                                </span>
                                 <span class="col-type">@col.TypeName</span>
                             </th>
                         }
@@ -78,7 +191,7 @@ else
                     </tr>
                 </thead>
                 <tbody>
-                    <Virtualize Items="Result.Rows.ToList()" Context="row" ItemSize="28">
+                    <Virtualize Items="_view" Context="row" ItemSize="28">
                         <tr class="@(ShowRowActions ? "results-row-interactive" : null)"
                             @oncontextmenu="e => OnRowContextMenu(e, row)"
                             @oncontextmenu:prevent="ShowRowActions">
@@ -113,6 +226,10 @@ else
                     </Virtualize>
                 </tbody>
             </table>
+            @if (_view.Count == 0 && Result.Rows.Count > 0)
+            {
+                <div class="empty-state">No loaded row contains "@_quickFilter".</div>
+            }
         }
     </div>
 }
@@ -140,6 +257,38 @@ else
     [Parameter]
     public EventCallback OnDataChanged { get; set; }
 
+    /// <summary>Gets the next page of a paged result.</summary>
+    [Parameter]
+    public EventCallback OnFetchMore { get; set; }
+
+    /// <summary>True while a statement runs, so the grid does not start a second query.</summary>
+    [Parameter]
+    public bool Busy { get; set; }
+
+    /// <summary>The WHERE condition of a data tab, as the tab's query uses it now.</summary>
+    [Parameter]
+    public string? ServerFilter { get; set; }
+
+    [Parameter]
+    public string? ServerOrderBy { get; set; }
+
+    [Parameter]
+    public bool ServerDescending { get; set; }
+
+    /// <summary>A data tab runs its query again with a new WHERE condition (empty removes it).</summary>
+    [Parameter]
+    public EventCallback<string> OnServerFilter { get; set; }
+
+    /// <summary>A data tab runs its query again with a new ORDER BY (a null column removes it).</summary>
+    [Parameter]
+    public EventCallback<GridSort> OnServerSort { get; set; }
+
+    /// <summary>
+    /// A data tab pages through a table, so the grid holds only some of its rows. Sort and filter must
+    /// then go to the server. Every other result is sorted and filtered here, on the loaded rows.
+    /// </summary>
+    private bool ServerSide => TableContext is not null;
+
     private bool ShowRowActions => TableContext is not null;
     private bool _canMutate;
 
@@ -150,11 +299,280 @@ else
     private double _menuX;
     private double _menuY;
 
+    private List<object?[]> _view = [];
+    private QueryResultModel? _viewSource;
+    private string _columnShape = "";
+    private int? _sortColumn;
+    private bool _sortDescending;
+    private string _quickFilter = "";
+    private string _whereDraft = "";
+    private string? _lastServerFilter;
+
+    private bool FilterActive => !ServerSide && _quickFilter.Length > 0;
+
     protected override void OnParametersSet()
     {
         _canMutate = TableContext?.HasPrimaryKey == true;
         if (!ShowRowActions)
             CloseRowMenu();
+
+        // The box shows the condition the query uses, until the user types a new one.
+        if (!string.Equals(_lastServerFilter, ServerFilter, StringComparison.Ordinal))
+        {
+            _lastServerFilter = ServerFilter;
+            _whereDraft = ServerFilter ?? "";
+        }
+
+        if (!ReferenceEquals(Result, _viewSource))
+        {
+            // A sort and a filter stay while the columns stay the same: "Fetch more" and a re-run keep
+            // them. A result with other columns is another query, so it starts without either.
+            string shape = Result is null ? "" : string.Join("\n", Result.Columns.Select(c => c.Name + ":" + c.TypeName));
+            if (!string.Equals(shape, _columnShape, StringComparison.Ordinal))
+            {
+                _columnShape = shape;
+                _sortColumn = null;
+                _sortDescending = false;
+                _quickFilter = "";
+            }
+
+            _viewSource = Result;
+            RebuildView();
+        }
+    }
+
+    private void RebuildView()
+    {
+        if (Result is null || !Result.IsResultSet)
+        {
+            _view = [];
+            return;
+        }
+
+        IEnumerable<object?[]> rows = Result.Rows;
+
+        if (FilterActive)
+        {
+            string term = _quickFilter;
+            rows = rows.Where(row => row.Any(v => v is not null && FormatCell(v).Contains(term, StringComparison.OrdinalIgnoreCase)));
+        }
+
+        if (!ServerSide && _sortColumn is int column && column < Result.Columns.Count)
+        {
+            Comparison<object?[]> compare = (a, b) => CompareCells(At(a, column), At(b, column));
+            List<object?[]> sorted = rows.ToList();
+            // List.Sort is not stable; order by the original index too, so equal values keep their order.
+            List<(object?[] Row, int Index)> indexed = sorted.Select((r, i) => (r, i)).ToList();
+            indexed.Sort((x, y) =>
+            {
+                int result = compare(x.Row, y.Row);
+                if (_sortDescending)
+                    result = -result;
+                return result != 0 ? result : x.Index.CompareTo(y.Index);
+            });
+            _view = indexed.Select(x => x.Row).ToList();
+            return;
+        }
+
+        _view = rows.ToList();
+    }
+
+    private static object? At(object?[] row, int index) => index < row.Length ? row[index] : null;
+
+    private string? SortDirection(int index)
+    {
+        if (ServerSide)
+        {
+            if (Result is null || string.IsNullOrEmpty(ServerOrderBy)
+                || !string.Equals(Result.Columns[index].Name, ServerOrderBy, StringComparison.OrdinalIgnoreCase))
+                return null;
+            return ServerDescending ? "desc" : "asc";
+        }
+
+        if (_sortColumn != index)
+            return null;
+        return _sortDescending ? "desc" : "asc";
+    }
+
+    private string SortHint(int index) => (SortDirection(index), ServerSide) switch
+    {
+        (null, true) => "Click to sort the table by this column (ORDER BY on the server)",
+        (null, false) => "Click to sort the loaded rows by this column",
+        ("asc", _) => "Sorted ascending. Click to sort descending",
+        _ => "Sorted descending. Click to remove the sort",
+    };
+
+    /// <summary>Each click moves the column through ascending, descending, and no sort.</summary>
+    private async Task OnHeaderClickAsync(int index)
+    {
+        if (Result is null)
+            return;
+
+        string? current = SortDirection(index);
+
+        if (ServerSide)
+        {
+            if (Busy)
+                return;
+
+            GridSort next = current switch
+            {
+                null => new GridSort(Result.Columns[index].Name, false),
+                "asc" => new GridSort(Result.Columns[index].Name, true),
+                _ => new GridSort(null, false),
+            };
+            await OnServerSort.InvokeAsync(next);
+            return;
+        }
+
+        switch (current)
+        {
+            case null:
+                _sortColumn = index;
+                _sortDescending = false;
+                break;
+            case "asc":
+                _sortDescending = true;
+                break;
+            default:
+                _sortColumn = null;
+                _sortDescending = false;
+                break;
+        }
+
+        RebuildView();
+    }
+
+    private static string RowsLabel(int count) => $"{count:N0} row{(count == 1 ? "" : "s")}";
+
+    /// <summary>
+    /// Downloads the rows the grid shows, in the order it shows them: after the filter and the sort.
+    /// No query runs again, so the file holds exactly what is on the screen.
+    /// </summary>
+    private async Task ExportAsync(ExportFormat format)
+    {
+        if (Result is null || _view.Count == 0)
+            return;
+
+        string name = TableContext?.Table ?? "result";
+        string baseName = $"{name}-{DateTime.UtcNow:yyyyMMdd-HHmmss}";
+
+        try
+        {
+            ExportResult export = ExportService.ExportRows(Result.Columns, _view, format, baseName);
+            await Js.InvokeVoidAsync("camusDownload.downloadText", export.FileName, export.Content, export.MimeType);
+            Snackbar.Add($"Exported {RowsLabel(export.RowsExported)} to {export.FileName}.", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Export failed: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private void OnQuickFilterInput(ChangeEventArgs e)
+    {
+        _quickFilter = e.Value?.ToString() ?? "";
+        RebuildView();
+    }
+
+    private void ClearQuickFilter()
+    {
+        _quickFilter = "";
+        RebuildView();
+    }
+
+    private async Task OnWhereKeyDownAsync(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !Busy)
+            await OnServerFilter.InvokeAsync(_whereDraft.Trim());
+    }
+
+    private async Task ClearWhereAsync()
+    {
+        _whereDraft = "";
+        if (!string.IsNullOrWhiteSpace(ServerFilter))
+            await OnServerFilter.InvokeAsync("");
+    }
+
+    /// <summary>
+    /// Orders two cells of one column. NULL comes first. Numbers compare by value, a NUMERIC by its
+    /// exact digits, and any other two values of one type by that type's own order. Anything else
+    /// compares as the text the grid shows.
+    /// </summary>
+    internal static int CompareCells(object? a, object? b)
+    {
+        if (a is null)
+            return b is null ? 0 : -1;
+        if (b is null)
+            return 1;
+
+        if (a is NumericText na && b is NumericText nb)
+            return CompareDecimalText(na.Text, nb.Text);
+
+        if (IsNumber(a) && IsNumber(b))
+        {
+            if (a is double or float || b is double or float)
+                return Convert.ToDouble(a).CompareTo(Convert.ToDouble(b));
+            return Convert.ToDecimal(a).CompareTo(Convert.ToDecimal(b));
+        }
+
+        if (a is byte[] ba && b is byte[] bb)
+            return ba.AsSpan().SequenceCompareTo(bb);
+
+        if (a.GetType() == b.GetType() && a is IComparable comparable && a is not string)
+            return comparable.CompareTo(b);
+
+        return string.Compare(FormatCell(a), FormatCell(b), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsNumber(object value) =>
+        value is sbyte or byte or short or ushort or int or uint or long or ulong or float or double or decimal;
+
+    /// <summary>
+    /// Compares two canonical decimal texts ("-12.5", "300", "0.001") digit by digit, so all 38 digits
+    /// of a NUMERIC count. A text that is not a plain decimal compares as text.
+    /// </summary>
+    internal static int CompareDecimalText(string a, string b)
+    {
+        if (!TrySplitDecimal(a, out bool negA, out string intA, out string fracA)
+            || !TrySplitDecimal(b, out bool negB, out string intB, out string fracB))
+            return string.CompareOrdinal(a, b);
+
+        if (negA != negB)
+            return negA ? -1 : 1;
+
+        int magnitude = intA.Length != intB.Length
+            ? intA.Length.CompareTo(intB.Length)
+            : string.CompareOrdinal(intA, intB);
+
+        if (magnitude == 0)
+        {
+            int width = Math.Max(fracA.Length, fracB.Length);
+            magnitude = string.CompareOrdinal(fracA.PadRight(width, '0'), fracB.PadRight(width, '0'));
+        }
+
+        return negA ? -magnitude : magnitude;
+    }
+
+    private static bool TrySplitDecimal(string text, out bool negative, out string integer, out string fraction)
+    {
+        text = text.Trim();
+        negative = text.StartsWith('-');
+        if (negative || text.StartsWith('+'))
+            text = text[1..];
+
+        int dot = text.IndexOf('.');
+        integer = (dot < 0 ? text : text[..dot]).TrimStart('0');
+        fraction = dot < 0 ? "" : text[(dot + 1)..].TrimEnd('0');
+
+        if (!integer.All(char.IsAsciiDigit) || !fraction.All(char.IsAsciiDigit))
+            return false;
+
+        // "-0" and "0" are the same value.
+        if (integer.Length == 0 && fraction.Length == 0)
+            negative = false;
+
+        return true;
     }
 
     private void OnRowContextMenu(MouseEventArgs e, object?[] row)

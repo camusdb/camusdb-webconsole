@@ -484,6 +484,264 @@ html, body {
     color: var(--camus-green);
 }
 
+.toolbar-spacer {
+    flex: 1;
+}
+
+/* One tab for each statement of a script run. */
+.result-tabs {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 4px 8px 0;
+    background: var(--camus-surface);
+    border-bottom: 1px solid var(--camus-border);
+    overflow-x: auto;
+    flex-shrink: 0;
+}
+
+.result-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 220px;
+    padding: 4px 10px;
+    border: 1px solid transparent;
+    border-bottom: none;
+    border-radius: 4px 4px 0 0;
+    background: transparent;
+    color: var(--camus-muted);
+    font: inherit;
+    font-family: var(--camus-mono);
+    font-size: 0.75rem;
+    white-space: nowrap;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+.result-tab-title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.result-tab:hover {
+    color: var(--camus-text);
+}
+
+.result-tab.active {
+    background: var(--camus-bg);
+    border-color: var(--camus-border);
+    color: var(--camus-text);
+    box-shadow: inset 0 2px 0 var(--camus-green);
+}
+
+.result-tab.failed {
+    color: var(--camus-danger);
+}
+
+.result-tab.active.failed {
+    box-shadow: inset 0 2px 0 var(--camus-danger);
+}
+
+.result-tab-index {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    border-radius: 8px;
+    background: var(--camus-surface-2);
+    font-size: 0.6875rem;
+    flex-shrink: 0;
+}
+
+.result-tabs-note {
+    margin-left: 8px;
+    color: var(--camus-muted);
+    font-size: 0.75rem;
+}
+
+.results-fetch-more {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding: 1px 8px 1px 4px;
+    border: 1px solid var(--camus-border);
+    border-radius: 4px;
+    background: transparent;
+    color: var(--camus-green);
+    font: inherit;
+    cursor: pointer;
+}
+
+.results-fetch-more:hover:not(:disabled) {
+    border-color: var(--camus-green);
+    background: rgba(46, 204, 113, 0.08);
+}
+
+.results-fetch-more:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.results-filter {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    flex: 0 1 320px;
+    padding: 1px 6px;
+    border: 1px solid var(--camus-border);
+    border-radius: 4px;
+    background: var(--camus-bg);
+}
+
+.results-filter:focus-within {
+    border-color: var(--camus-accent);
+}
+
+.results-filter-label {
+    color: var(--camus-accent);
+    font-family: var(--camus-mono);
+    font-size: 0.6875rem;
+    font-weight: 600;
+}
+
+.results-filter input {
+    flex: 1;
+    min-width: 0;
+    border: 0;
+    outline: none;
+    background: transparent;
+    color: var(--camus-text);
+    font-family: var(--camus-mono);
+    font-size: 0.75rem;
+    padding: 2px 0;
+}
+
+.results-filter button {
+    border: 0;
+    background: transparent;
+    color: var(--camus-muted);
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0 2px;
+}
+
+.results-filter button:hover {
+    color: var(--camus-text);
+}
+
+.results-export {
+    margin-left: auto;
+}
+
+/* The plan toggle and the table badge already push to the right; the menu then follows them. */
+.results-view-toggle ~ .results-export,
+.results-table-badge ~ .results-export {
+    margin-left: 0;
+}
+
+.results-toolbar-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 8px 1px 6px;
+    border: 1px solid var(--camus-border);
+    border-radius: 4px;
+    background: transparent;
+    color: var(--camus-text);
+    font: inherit;
+    cursor: pointer;
+}
+
+.results-toolbar-btn:hover:not(:disabled) {
+    border-color: var(--camus-accent);
+    color: var(--camus-accent);
+}
+
+.results-toolbar-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.results-export-note {
+    max-width: 260px;
+    padding: 6px 16px 8px;
+    border-top: 1px solid var(--camus-border);
+    color: var(--camus-muted);
+    font-size: 0.75rem;
+}
+
+/* Query history dialog. */
+.history-list {
+    max-height: 60vh;
+    overflow-y: auto;
+    border: 1px solid var(--camus-border);
+    border-radius: 4px;
+}
+
+.history-item {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--camus-border);
+    cursor: pointer;
+}
+
+.history-item:last-child {
+    border-bottom: none;
+}
+
+.history-item:hover {
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.history-item.selected {
+    background: rgba(78, 161, 255, 0.12);
+    box-shadow: inset 3px 0 0 var(--camus-accent);
+}
+
+.history-meta {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: var(--camus-muted);
+    font-size: 0.75rem;
+    font-family: var(--camus-mono);
+}
+
+.history-db {
+    padding: 0 6px;
+    border-radius: 4px;
+    background: rgba(78, 161, 255, 0.15);
+    color: var(--camus-accent);
+}
+
+.history-sql {
+    margin: 4px 0 0;
+    max-height: 4.5em;
+    overflow: hidden;
+    color: var(--camus-text);
+    font-family: var(--camus-mono);
+    font-size: 0.8125rem;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.history-error {
+    margin-top: 2px;
+    color: var(--camus-danger);
+    font-size: 0.75rem;
+}
+
+.history-empty {
+    padding: 24px;
+    text-align: center;
+    color: var(--camus-muted);
+}
+
 /* Query plan flow. Every step is a two-column grid: the chain runs down the first column, and a
    join's second input sits beside its node in the second. */
 .plan-flow-wrap {
@@ -806,6 +1064,21 @@ html, body {
     background: var(--camus-surface-2);
     z-index: 1;
     font-weight: 500;
+}
+
+.results-table th.sortable {
+    cursor: pointer;
+    user-select: none;
+}
+
+.results-table th.sortable:hover {
+    background: #30353b;
+}
+
+.results-table th .col-sort {
+    margin-left: 4px;
+    color: var(--camus-green);
+    font-size: 0.625rem;
 }
 
 .results-table th .col-type {

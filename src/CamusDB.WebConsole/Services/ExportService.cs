@@ -45,10 +45,33 @@ public sealed class ExportService
             };
         }
 
+        ExportResult export = ExportRows(result.Columns, result.Rows, format, table);
+        return new ExportResult
+        {
+            Success = true,
+            Content = export.Content,
+            FileName = export.FileName,
+            MimeType = export.MimeType,
+            RowsExported = export.RowsExported,
+            Truncated = result.Truncated,
+            MaxRows = result.MaxRows,
+        };
+    }
+
+    /// <summary>
+    /// Writes rows that the console already holds (a result in the grid) to CSV or JSON. No query
+    /// runs. The file is called <c>{baseName}.csv</c> or <c>{baseName}.json</c>.
+    /// </summary>
+    public static ExportResult ExportRows(
+        IReadOnlyList<QueryColumn> columns,
+        IReadOnlyCollection<object?[]> rows,
+        ExportFormat format,
+        string baseName)
+    {
         string content = format switch
         {
-            ExportFormat.Csv => ToCsv(result),
-            ExportFormat.Json => ToJson(result),
+            ExportFormat.Csv => ToCsv(columns, rows),
+            ExportFormat.Json => ToJson(columns, rows),
             _ => throw new ArgumentOutOfRangeException(nameof(format)),
         };
 
@@ -59,15 +82,13 @@ public sealed class ExportService
         {
             Success = true,
             Content = content,
-            FileName = $"{table}.{ext}",
+            FileName = $"{baseName}.{ext}",
             MimeType = mime,
-            RowsExported = result.RowsReturned,
-            Truncated = result.Truncated,
-            MaxRows = result.MaxRows,
+            RowsExported = rows.Count,
         };
     }
 
-    private static string ToCsv(QueryResultModel result)
+    private static string ToCsv(IReadOnlyList<QueryColumn> columns, IEnumerable<object?[]> rows)
     {
         var config = new CsvConfiguration(CultureInfo.InvariantCulture)
         {
@@ -77,13 +98,13 @@ public sealed class ExportService
         using var writer = new StringWriter();
         using var csv = new CsvWriter(writer, config);
 
-        foreach (QueryColumn column in result.Columns)
+        foreach (QueryColumn column in columns)
             csv.WriteField(column.Name);
         csv.NextRecord();
 
-        foreach (object?[] row in result.Rows)
+        foreach (object?[] row in rows)
         {
-            for (int i = 0; i < result.Columns.Count; i++)
+            for (int i = 0; i < columns.Count; i++)
             {
                 object? value = i < row.Length ? row[i] : null;
                 csv.WriteField(FormatCell(value));
@@ -95,22 +116,44 @@ public sealed class ExportService
         return writer.ToString();
     }
 
-    private static string ToJson(QueryResultModel result)
+    private static string ToJson(IReadOnlyList<QueryColumn> columns, IEnumerable<object?[]> rows)
     {
-        var rows = new List<Dictionary<string, object?>>(result.Rows.Count);
-        foreach (object?[] row in result.Rows)
+        string[] keys = JsonKeys(columns);
+        var objects = new List<Dictionary<string, object?>>();
+        foreach (object?[] row in rows)
         {
             var obj = new Dictionary<string, object?>(StringComparer.Ordinal);
-            for (int i = 0; i < result.Columns.Count; i++)
+            for (int i = 0; i < columns.Count; i++)
             {
                 object? value = i < row.Length ? row[i] : null;
-                obj[result.Columns[i].Name] = NormalizeJsonValue(value);
+                obj[keys[i]] = NormalizeJsonValue(value);
             }
 
-            rows.Add(obj);
+            objects.Add(obj);
         }
 
-        return JsonSerializer.Serialize(rows, new JsonSerializerOptions { WriteIndented = true });
+        return JsonSerializer.Serialize(objects, new JsonSerializerOptions { WriteIndented = true });
+    }
+
+    /// <summary>
+    /// One JSON key for each column. A query can return two columns with one name
+    /// (<c>SELECT a.id, b.id</c>), and one object cannot hold both, so the second one becomes
+    /// <c>id_2</c>, the third <c>id_3</c>, and so on.
+    /// </summary>
+    private static string[] JsonKeys(IReadOnlyList<QueryColumn> columns)
+    {
+        string[] keys = new string[columns.Count];
+        HashSet<string> used = new(StringComparer.Ordinal);
+
+        for (int i = 0; i < columns.Count; i++)
+        {
+            string key = columns[i].Name;
+            for (int n = 2; !used.Add(key); n++)
+                key = $"{columns[i].Name}_{n}";
+            keys[i] = key;
+        }
+
+        return keys;
     }
 
     private static object? NormalizeJsonValue(object? value) => value switch

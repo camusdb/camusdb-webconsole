@@ -20,8 +20,17 @@
     [Parameter]
     public EventCallback<string> ValueChanged { get; set; }
 
+    /// <summary>Ctrl/Cmd+Enter: run the selection, or the statement at the cursor.</summary>
     [Parameter]
     public EventCallback OnRunRequested { get; set; }
+
+    /// <summary>Alt+X: run every statement of the selection, or of the whole tab.</summary>
+    [Parameter]
+    public EventCallback OnRunScriptRequested { get; set; }
+
+    /// <summary>Gives the completion list the tables and columns of the session database.</summary>
+    [Parameter]
+    public DotNetObjectReference<SchemaCompletionSource>? CompletionSource { get; set; }
 
     /// <summary>
     /// Raised when the editor gains or loses a non-empty selection, so the toolbar can say whether
@@ -68,10 +77,11 @@
         try
         {
             await JS.InvokeAsync<bool>("camusSql.applyToEditor", EditorId);
+            await JS.InvokeVoidAsync("camusSql.setCompletionSource", CompletionSource);
         }
         catch (JSException)
         {
-            // Highlighting is cosmetic — never let it break the editor.
+            // Highlighting and completion are conveniences — never let them break the editor.
         }
 
         if (_editor is not null)
@@ -80,6 +90,12 @@
             {
                 await SyncValueAsync();
                 await OnRunRequested.InvokeAsync();
+            });
+
+            await _editor.AddCommand((int)KeyMod.Alt | (int)KeyCode.KeyX, async _ =>
+            {
+                await SyncValueAsync();
+                await OnRunScriptRequested.InvokeAsync();
             });
         }
     }
@@ -170,6 +186,20 @@
 
         string selected = await model.GetValueInRange(selection, EndOfLinePreference.TextDefined);
         return string.IsNullOrWhiteSpace(selected) ? null : selected;
+    }
+
+    /// <summary>The cursor position as a character offset into the editor text, or null.</summary>
+    public async Task<int?> GetCursorOffsetAsync()
+    {
+        if (_editor is null || !_ready)
+            return null;
+
+        BlazorMonaco.Position? position = await _editor.GetPosition();
+        TextModel? model = await _editor.GetModel();
+        if (position is null || model is null)
+            return null;
+
+        return await model.GetOffsetAt(position);
     }
 
     public async Task SyncValueAsync()

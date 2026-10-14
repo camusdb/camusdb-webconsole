@@ -1,0 +1,150 @@
+@inject QueryHistoryService History
+
+<MudDialog>
+    <TitleContent>
+        <MudText Typo="Typo.h6">Query history</MudText>
+    </TitleContent>
+    <DialogContent>
+        <MudStack Spacing="2" Class="mt-1">
+            <MudTextField @bind-Value="_search"
+                          Placeholder="Search SQL, database or error…"
+                          Variant="Variant.Outlined"
+                          Margin="Margin.Dense"
+                          Immediate="true"
+                          DebounceInterval="150"
+                          Adornment="Adornment.Start"
+                          AdornmentIcon="@Icons.Material.Filled.Search"
+                          Clearable="true" />
+
+            @if (!_loaded)
+            {
+                <MudProgressLinear Indeterminate="true" />
+            }
+            else if (Filtered.Count == 0)
+            {
+                <div class="history-empty">
+                    @(History.Entries.Count == 0 ? "No statements yet. Each statement you run is recorded here." : "No statement matches the search.")
+                </div>
+            }
+            else
+            {
+                <div class="history-list" role="listbox" aria-label="Query history">
+                    @foreach (QueryHistoryEntry entry in Filtered)
+                    {
+                        <div class="history-item @(ReferenceEquals(entry, _selected) ? "selected" : null)"
+                             role="option"
+                             aria-selected="@(ReferenceEquals(entry, _selected) ? "true" : "false")"
+                             title="Double-click to open in a new tab"
+                             @onclick="() => _selected = entry"
+                             @ondblclick="() => Open(entry)">
+                            <div class="history-meta">
+                                @if (entry.Success)
+                                {
+                                    <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Size="Size.Small" Class="status-ok" />
+                                }
+                                else
+                                {
+                                    <MudIcon Icon="@Icons.Material.Filled.Error" Size="Size.Small" Color="Color.Error" />
+                                }
+                                <span>@entry.ExecutedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</span>
+                                @if (!string.IsNullOrEmpty(entry.Database))
+                                {
+                                    <span class="history-db">@entry.Database</span>
+                                }
+                                <span>@FormatDuration(entry.DurationMs)</span>
+                                @if (entry.Success && entry.Rows is int rows)
+                                {
+                                    <span>@rows.ToString("N0") row@(rows == 1 ? "" : "s")</span>
+                                }
+                            </div>
+                            <pre class="history-sql">@entry.Sql</pre>
+                            @if (!entry.Success && !string.IsNullOrEmpty(entry.Error))
+                            {
+                                <div class="history-error">@entry.Error</div>
+                            }
+                        </div>
+                    }
+                </div>
+            }
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton Color="Color.Error"
+                   Variant="Variant.Text"
+                   Disabled="History.Entries.Count == 0"
+                   OnClick="ClearAsync"
+                   Class="mr-auto">
+            @(_confirmClear ? "Click again to clear" : "Clear history")
+        </MudButton>
+        <MudButton OnClick="Cancel">Close</MudButton>
+        <MudButton Color="Color.Primary"
+                   Variant="Variant.Filled"
+                   Disabled="_selected is null"
+                   OnClick="() => Open(_selected)">
+            Open in new tab
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter]
+    private IMudDialogInstance MudDialog { get; set; } = null!;
+
+    private string _search = "";
+    private QueryHistoryEntry? _selected;
+    private bool _loaded;
+    private bool _confirmClear;
+
+    private List<QueryHistoryEntry> Filtered
+    {
+        get
+        {
+            string term = _search?.Trim() ?? "";
+            if (term.Length == 0)
+                return History.Entries.ToList();
+
+            return History.Entries
+                .Where(e => e.Sql.Contains(term, StringComparison.OrdinalIgnoreCase)
+                    || (e.Database?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
+                    || (e.Error?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false))
+                .ToList();
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await History.EnsureLoadedAsync();
+        _loaded = true;
+    }
+
+    private void Open(QueryHistoryEntry? entry)
+    {
+        if (entry is not null)
+            MudDialog.Close(DialogResult.Ok(entry.Sql));
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    /// <summary>Two clicks, so one stray click cannot drop the whole history.</summary>
+    private async Task ClearAsync()
+    {
+        if (!_confirmClear)
+        {
+            _confirmClear = true;
+            return;
+        }
+
+        await History.ClearAsync();
+        _confirmClear = false;
+        _selected = null;
+    }
+
+    private static string FormatDuration(double ms)
+    {
+        if (ms < 1)
+            return $"{ms * 1000:0.##}μs";
+        if (ms < 1000)
+            return $"{ms:0.##}ms";
+        return $"{ms / 1000:0.###}s";
+    }
+}

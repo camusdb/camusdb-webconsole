@@ -30,7 +30,7 @@ Open [http://localhost:8080](http://localhost:8080).
 | `CamusDB__Database` | Database name for the session |
 | `CamusDB__Protocol` | `rest` (default) or `grpc` |
 | `CamusDB__TimeoutSeconds` | Request timeout |
-| `CamusDB__MaxRows` | Cap on rows materialised into the results grid |
+| `CamusDB__MaxRows` | Rows in one page of the results grid, and the cap on a statement the grid cannot page and on exports |
 | `CamusDB__User` | User to authenticate as (see [Authentication](#authentication)) |
 | `CamusDB__Password` | That user's password |
 | `CamusDB__AccessToken` | A bearer token obtained elsewhere, instead of logging in |
@@ -81,7 +81,7 @@ On first load the console connects using `appsettings.json`. Use **Configure** i
 | `Database` | Database name for the session |
 | `Protocol` | `rest` (default) or `grpc` |
 | `TimeoutSeconds` | Request timeout |
-| `MaxRows` | Cap on rows materialised into the results grid |
+| `MaxRows` | Rows in one page of the results grid, and the cap on a statement the grid cannot page and on exports |
 | `User` | User to authenticate as — empty means unauthenticated |
 | `Password` | That user's password |
 | `AccessToken` | A bearer token obtained elsewhere, used verbatim instead of logging in |
@@ -365,21 +365,54 @@ connection footer showing endpoint, protocol, database, identity, and server ver
 
 ### SQL editor
 
-- Monaco editor with **Run query** and Ctrl/Cmd+Enter
-- **Select part of the SQL to run only that.** With a selection, both the button and Ctrl/Cmd+Enter
-  execute just the highlighted text and the button reads *Run selection*; with nothing selected they
-  run the whole tab as before. Programmatic re-runs (a data tab refreshing after a row edit) always
-  run the tab's own SQL.
+- Monaco editor with two run commands:
+  - **Run statement** (Ctrl/Cmd+Enter) runs the statement at the cursor. With a selection, it runs the
+    selected text, and the button reads *Run selection*.
+  - **Run script** (Alt+X) runs each statement of the tab, or of the selection, in order.
+- **Scripts.** The console cuts the SQL at each `;` outside strings, backtick names and comments. It
+  uses the rules of the server's own `SqlScriptSplitter` (`Services/SqlScript.cs`). A script run gives
+  one result tab for each statement. The run stops at the first statement that fails, and the result
+  tabs show how many statements did not run. **Stop** cancels the statement in progress and the rest.
+- On a line that ends with `;`, the cursor after the `;` selects the statement on that line, not the
+  next one. Programmatic re-runs (a data tab refreshing after a row edit) always run the tab's own SQL.
 - CamusDB-specific SQL highlighting and keyword/function completion (`wwwroot/js/camus-sql.js`), with
   the word lists derived from the server's own lexer and scalar-function registry. Backtick-quoted
   identifiers render salmon, string literals purple; both colours live in the `camus-dark` theme at the
   top of that file.
+- **Completion that knows the schema.** The list also has the tables of the session database and the
+  columns of each table that the statement names. After `FROM`, `JOIN`, `INTO`, `UPDATE` or `TABLE`,
+  the tables come first. After `alias.` or `table.`, the list has only the columns of that table.
+  `SchemaCompletionSource` reads the names with `SHOW TABLES` and `SHOW COLUMNS FROM` and keeps them
+  until the session changes or a `CREATE`, `ALTER`, `DROP`, `RENAME` or `TRUNCATE` runs from the editor.
+  A name that is a keyword, or that is not a plain identifier, is inserted with backticks.
+- **Query history.** The clock button opens each statement run from a query tab, newest first, with
+  its database, time, duration, row count and error. Search by SQL, database or error text.
+  Double-click an entry, or select it and click *Open in new tab*, to open its SQL in a new tab. The
+  history keeps 200 entries in `localStorage` (key `camusdb.webconsole.history`). It does not keep a
+  statement longer than 50,000 characters. In a statement with `IDENTIFIED` (`CREATE USER` and
+  `ALTER USER`), each string literal is stored as `'********'`, so the history never keeps a password.
 - Multi-tab queries with per-tab titles, execution timings, and cancellable runs
-- Result grid with type-aware cell styling (`NULL`, numbers, booleans, timestamps, blobs as hex) and a
-  row-cap warning when the result was truncated at `MaxRows`
+- Result grid with type-aware cell styling (`NULL`, numbers, booleans, timestamps, blobs as hex)
 - `INSERT … RETURNING` shows the returned rows in the grid, with the inserted-row count
 - A `NUMERIC` cell shows its exact text, all 38 digits. JSON export writes it as a string, as the
   server does
+
+### Results grid
+
+- **Pages.** A `SELECT` without its own `LIMIT` or `OFFSET` gets one page of `MaxRows` rows. The
+  console adds `LIMIT MaxRows + 1` to the statement; the extra row only tells that more rows exist.
+  **Fetch more** in the results toolbar gets the next page with `OFFSET` and adds its rows to the grid.
+  Without an `ORDER BY`, the server does not promise the same row order on each page.
+- Each other statement (`SHOW`, `EXPLAIN`, a `SELECT` with its own `LIMIT`, `INSERT … RETURNING`) is
+  read up to `MaxRows` rows, and the grid shows a row-cap warning when the result was truncated.
+- **Sort.** Click a column header to sort ascending, again for descending, and a third time to remove
+  the sort. A `NUMERIC` sorts by its exact value and `NULL` comes first. In a query tab, the sort and
+  the **Filter loaded rows** box apply to the rows that the grid holds. Fetch more rows first to sort
+  or filter all of them.
+- In a data tab (*Edit/View Data*), the sort and the filter go to the server, because the grid holds
+  one page of the table. A header click adds `ORDER BY`, and the **WHERE** box takes a SQL condition
+  (press Enter). The console writes the new query into the tab's editor, so the SQL that the grid
+  shows is always visible. A condition with `;` is refused.
 
 ### Query plans
 
@@ -416,15 +449,25 @@ SEQUENCES`) are listed after its tables; hover one to see its start, increment, 
 
 - Double-click a table to insert `SELECT * FROM {table} LIMIT 100` into the active tab
 - Double-click a sequence to insert `SHOW CREATE SEQUENCE {sequence}` into the active tab
-- **Right-click a database** → *Create a Table* (column name/type/`NOT NULL`/PK builder) or *Drop
-  Database* (confirmation required)
-- **Right-click a table** → *Edit/View Data*, *Drop Table* (confirmation required), *Export Table*,
+- **Right-click a database** → *Create a Table* (column name/type/`NOT NULL`/PK builder), *Rename
+  Database* or *Drop Database* (confirmation required)
+- **Right-click a table** → *Edit/View Data*, *Rename Table*, *Drop Table* (confirmation required), *Export Table*,
   *Add a Column*, *Add an Index* (pick columns, optionally `UNIQUE`), or *Add a Foreign Key* (pick the parent table,
   then one or more column pairs; the dialog proposes the parent's primary key). The server checks
   every existing row first, so a row without a parent fails the statement with `CADB0304`
 - **Right-click a foreign key** → *Drop Constraint* (confirmation required). An index that the
   constraint created goes with it
-- **Right-click a sequence** → *Show Create Sequence* or *Drop Sequence* (confirmation required)
+- **Right-click a sequence** → *Show Create Sequence*, *Rename Sequence* or *Drop Sequence*
+  (confirmation required)
+- **Rename.** *Rename Database*, *Rename Table*, *Rename Sequence*, and a right-click on a column
+  (*Rename Column*) or an index (*Rename Index*) open one dialog. It shows the statement before it runs
+  (`RENAME DATABASE`, `ALTER TABLE … RENAME TO`, `ALTER TABLE … RENAME COLUMN`, `ALTER TABLE … RENAME
+  INDEX`, `ALTER SEQUENCE … RENAME TO`). The new name must match `[a-zA-Z_][a-zA-Z0-9_]*`, because the
+  lexer accepts no other name, also inside backticks. The dialog refuses a name that another object of
+  the same kind already has, and a change of letter case only. A rename of the active database moves
+  the session to the new name. The server updates a column `DEFAULT nextval('…')` when its sequence
+  gets a new name. Open tabs, saved SQL and the query history keep the old name. A foreign key has no
+  rename statement, so it has no *Rename* item
 - In *Create a Table*, an `INT64` column accepts `nextval('seq')` as its default
 - In *Create a Table*, a `NUMERIC` column takes a decimal default such as `9.99`, written as the
   typed literal `NUMERIC '9.99'`
@@ -441,7 +484,8 @@ SEQUENCES`) are listed after its tables; hover one to see its start, increment, 
 ### Row editing
 
 *Edit/View Data* on a table opens a data tab: it runs `SELECT *` and attaches the table's schema to the
-result, which turns on per-row **Edit** and **Delete** actions (also on right-click of a row).
+result, which turns on per-row **Edit** and **Delete** actions (also on right-click of a row). The tab
+pages through the table, and it sorts and filters on the server (see [Results grid](#results-grid)).
 
 - The edit dialog is generated from the column schema — primary-key fields are read-only, nullable
   fields get a **NULL** toggle, and values are validated against the column type before the statement
@@ -459,6 +503,13 @@ CsvHelper (proper quoting/escaping); JSON emits an array of objects with ISO-860
 `D`-format GUIDs. Exports run through the same query path, so they are capped at `MaxRows` and the
 dialog warns when the result was truncated.
 
+**Export** in the results toolbar downloads the result of any query as CSV or JSON. It writes the rows
+that the grid shows, in the order that the grid shows them, so the grid's filter and sort apply. No
+query runs again. A paged result exports only its loaded rows: click **Fetch more** first to export
+more. The menu tells when the filter or the paging limits the rows. The file is called
+`result-{UTC time}.csv`, or `{table}-{UTC time}.csv` in a data tab. In JSON, a second column with the
+same name (`SELECT a.id, b.id`) gets the key `id_2`, so no value is lost.
+
 ### Authentication
 
 User/password login or a supplied bearer token, per browser session — see
@@ -468,26 +519,28 @@ User/password login or a supplied bearer token, per browser session — see
 
 Drawer width, editor/results split, active database, user name, the table or flow view for query plans,
 and all open SQL tabs (with their text) are persisted to `localStorage` and restored on the next visit.
-Passwords and tokens never are.
+The query history has its own key (see [SQL editor](#sql-editor)). Passwords and tokens never are.
 
 ## Project layout
 
 ```
 src/CamusDB.WebConsole/
   Components/Console/   # Schema tree, editor, results grid, query plan flow, dialogs (configure,
-                        # create table, add index, add foreign key, edit record, export, confirm)
+                        # create table, add index, add foreign key, edit record, export, confirm,
+                        # query history)
   Components/Layout/    # Main shell + theme
   Services/             # Session, schema, query execution, query plan parser, export, preferences,
-                        # SQL builder
-  Models/               # Query results, query plans, schema nodes, table data context, UI preferences
+                        # SQL builder, script splitter, query history, schema completion
+  Models/               # Query results, query plans, schema nodes, table data context, UI preferences,
+                        # query history entries
   Options/              # CamusDbOptions
   wwwroot/js/           # camus-sql.js (Monaco language), download.js, storage.js
 ```
 
 ## Notes
 
-- `CamusDB.Client` buffers full query responses; keep `MaxRows` reasonable for large tables — it caps
-  the results grid *and* exports.
+- `CamusDB.Client` buffers full query responses; keep `MaxRows` reasonable for large tables — it is
+  the page size of the results grid, and it caps exports and each statement that the grid cannot page.
 - `CamusSchemaMetadataClient` is not used — metadata endpoints are still stubs in the client; the console uses SQL `SHOW` instead.
 - Schema-tree DDL actions (create/drop table, drop database, create index) are ordinary SQL statements;
   anything they can't express is still available by typing it in the editor.

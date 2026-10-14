@@ -1,0 +1,136 @@
+@inject QueryExecutionService Queries
+
+<MudDialog>
+    <TitleContent>
+        <MudText Typo="Typo.h6">Rename @Kind — @CurrentName</MudText>
+    </TitleContent>
+    <DialogContent>
+        <MudStack Spacing="3" Class="mt-2">
+            <MudTextField @bind-Value="_name"
+                          Label="New name"
+                          Variant="Variant.Outlined"
+                          Immediate="true"
+                          AutoFocus="true"
+                          Disabled="_busy"
+                          Error="@(Problem is not null && Edited)"
+                          ErrorText="@Problem"
+                          OnKeyDown="OnKeyDownAsync"
+                          spellcheck="false" />
+
+            @if (!string.IsNullOrEmpty(Warning))
+            {
+                <MudAlert Severity="Severity.Warning" Dense="true">@Warning</MudAlert>
+            }
+
+            <MudField Label="SQL preview" Variant="Variant.Outlined">
+                <pre class="sql-preview">@(Problem is null ? BuildSql(_name.Trim()) + ";" : "-- enter a new name --")</pre>
+            </MudField>
+
+            @if (!string.IsNullOrEmpty(_error))
+            {
+                <MudAlert Severity="Severity.Error" Dense="true">@_error</MudAlert>
+            }
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel" Disabled="_busy">Cancel</MudButton>
+        <MudButton Color="Color.Primary"
+                   Variant="Variant.Filled"
+                   Disabled="_busy || Problem is not null"
+                   OnClick="RenameAsync">
+            Rename
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter]
+    private IMudDialogInstance MudDialog { get; set; } = null!;
+
+    /// <summary>What is renamed, in lower case: "database", "table", "column", "index" or "sequence".</summary>
+    [Parameter]
+    public string Kind { get; set; } = "";
+
+    [Parameter]
+    public string CurrentName { get; set; } = "";
+
+    /// <summary>The names next to this one (the other tables of the database, for example).</summary>
+    [Parameter]
+    public IReadOnlyList<string> SiblingNames { get; set; } = [];
+
+    /// <summary>Gives the statement for a valid new name.</summary>
+    [Parameter]
+    public Func<string, string> BuildSql { get; set; } = _ => "";
+
+    /// <summary>A note about what the rename does not change, shown above the preview.</summary>
+    [Parameter]
+    public string? Warning { get; set; }
+
+    private string _name = "";
+    private string? _error;
+    private bool _busy;
+
+    /// <summary>The field shows its error once the user changes the name, not on the first view.</summary>
+    private bool Edited => !string.Equals(_name, CurrentName, StringComparison.Ordinal);
+
+    protected override void OnInitialized() => _name = CurrentName;
+
+    private string? Problem
+    {
+        get
+        {
+            string name = _name?.Trim() ?? "";
+            if (name.Length == 0)
+                return "Enter a name.";
+            if (!SqlBuilder.IsValidIdentifier(name))
+                return "Use letters, digits and _ only, and start with a letter or _.";
+            if (string.Equals(name, CurrentName, StringComparison.Ordinal))
+                return "The name is the same.";
+            // The console matches names without case (the session database, the schema tree), so a
+            // rename that only changes the case could leave it on the old spelling.
+            if (string.Equals(name, CurrentName, StringComparison.OrdinalIgnoreCase))
+                return "The new name must differ by more than letter case.";
+            if (SiblingNames.Any(n => !string.Equals(n, CurrentName, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(n, name, StringComparison.OrdinalIgnoreCase)))
+                return $"A {Kind} with this name already exists.";
+            return null;
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private async Task OnKeyDownAsync(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !_busy && Problem is null)
+            await RenameAsync();
+    }
+
+    private async Task RenameAsync()
+    {
+        if (Problem is not null)
+            return;
+
+        string newName = _name.Trim();
+        _error = null;
+        _busy = true;
+        try
+        {
+            QueryResultModel result = await Queries.ExecuteAsync(BuildSql(newName));
+            if (!result.Success)
+            {
+                _error = result.ErrorMessage ?? "Rename failed.";
+                return;
+            }
+
+            MudDialog.Close(DialogResult.Ok(newName));
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

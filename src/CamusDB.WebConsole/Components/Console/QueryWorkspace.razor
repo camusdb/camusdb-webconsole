@@ -1,6 +1,9 @@
 @inject CamusSessionService Session
 @inject QueryExecutionService Queries
 @inject ConsolePreferencesService Prefs
+@inject QueryHistoryService History
+@inject SchemaCompletionSource Completion
+@inject IDialogService DialogService
 @inject ISnackbar Snackbar
 @implements IDisposable
 
@@ -36,6 +39,14 @@
     <div class="query-split">
         <div class="query-editor-pane" style="@($"height:{_editorHeight}px")">
             <div class="query-editor-toolbar">
+                <MudTooltip Text="Query history">
+                    <MudIconButton Icon="@Icons.Material.Filled.History"
+                                   Size="Size.Small"
+                                   Class="history-btn"
+                                   OnClick="OpenHistoryAsync"
+                                   aria-label="Query history" />
+                </MudTooltip>
+                <span class="toolbar-spacer"></span>
                 @if (_running)
                 {
                     <MudButton Variant="Variant.Outlined"
@@ -46,14 +57,26 @@
                         Stop
                     </MudButton>
                 }
-                <MudButton Variant="Variant.Filled"
-                           Size="Size.Small"
-                           Class="run-btn"
-                           StartIcon="@Icons.Material.Filled.PlayArrow"
-                           Disabled="_running || !Session.IsConnected"
-                           OnClick="RunAsync">
-                    @(_hasSelection ? "Run selection" : "Run query")
-                </MudButton>
+                <MudTooltip Text="Alt+X — every statement of the selection, or of the tab, in order">
+                    <MudButton Variant="Variant.Outlined"
+                               Size="Size.Small"
+                               Class="run-script-btn"
+                               StartIcon="@Icons.Material.Filled.PlaylistPlay"
+                               Disabled="_running || !Session.IsConnected"
+                               OnClick="RunScriptAsync">
+                        Run script
+                    </MudButton>
+                </MudTooltip>
+                <MudTooltip Text="Ctrl/Cmd+Enter — the selection, or the statement at the cursor">
+                    <MudButton Variant="Variant.Filled"
+                               Size="Size.Small"
+                               Class="run-btn"
+                               StartIcon="@Icons.Material.Filled.PlayArrow"
+                               Disabled="_running || !Session.IsConnected"
+                               OnClick="RunAsync">
+                        @(_hasSelection ? "Run selection" : "Run statement")
+                    </MudButton>
+                </MudTooltip>
             </div>
             @if (ActiveTab is not null)
             {
@@ -63,7 +86,9 @@
                                  Value="@ActiveTab.Sql"
                                  ValueChanged="OnSqlChangedAsync"
                                  HasSelectionChanged="OnHasSelectionChanged"
-                                 OnRunRequested="RunAsync" />
+                                 OnRunRequested="RunAsync"
+                                 OnRunScriptRequested="RunScriptAsync"
+                                 CompletionSource="_completionRef" />
                 </div>
             }
         </div>
@@ -80,9 +105,39 @@
         }
 
         <div class="results-pane" @key="@($"results-{_activeId}")">
+            @if (ActiveTab is { Results.Count: > 1 } scriptTab)
+            {
+                <div class="result-tabs" role="tablist" aria-label="Statement results">
+                    @for (int r = 0; r < scriptTab.Results.Count; r++)
+                    {
+                        int index = r;
+                        StatementRun run = scriptTab.Results[index];
+                        <button type="button"
+                                role="tab"
+                                class="result-tab @(index == scriptTab.ActiveResult ? "active" : null) @(run.Result.Success ? null : "failed")"
+                                aria-selected="@(index == scriptTab.ActiveResult ? "true" : "false")"
+                                title="@run.Sql"
+                                @onclick="() => scriptTab.ActiveResult = index">
+                            <span class="result-tab-index">@(index + 1)</span>
+                            <span class="result-tab-title">@TruncateTitle(run.Sql)</span>
+                        </button>
+                    }
+                    @if (scriptTab.SkippedStatements > 0)
+                    {
+                        <span class="result-tabs-note">@scriptTab.SkippedStatements not run</span>
+                    }
+                </div>
+            }
             <ExecutionStatusBar Result="ActiveTab?.LastResult" />
             <ResultsGrid Result="ActiveTab?.LastResult"
                          TableContext="ActiveTab?.DataContext"
+                         Busy="_running"
+                         ServerFilter="@ActiveTab?.DataWhere"
+                         ServerOrderBy="@ActiveTab?.DataOrderBy"
+                         ServerDescending="ActiveTab?.DataDescending ?? false"
+                         OnServerFilter="ApplyDataFilterAsync"
+                         OnServerSort="ApplyDataSortAsync"
+                         OnFetchMore="FetchMoreAsync"
                          OnDataChanged="RefreshActiveDataAsync" />
         </div>
     </div>
@@ -101,12 +156,14 @@
     private int _tabSeq = 1;
     private bool _hydrated;
     private bool _hasSelection;
+    private DotNetObjectReference<SchemaCompletionSource>? _completionRef;
 
     private QueryTab? ActiveTab => _tabs.FirstOrDefault(t => t.Id == _activeId);
 
     protected override void OnInitialized()
     {
         Session.Changed += OnSessionChanged;
+        _completionRef = DotNetObjectReference.Create(Completion);
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -174,6 +231,7 @@
             ActiveTab.Sql = sql;
             ActiveTab.Title = TruncateTitle(sql);
             ActiveTab.DataContext = null;
+            ActiveTab.ClearResults();
             await PersistTabsAsync();
         }
 
@@ -184,8 +242,8 @@
     {
         await PersistActiveEditorAsync();
 
-        int limit = Math.Max(1, Session.MaxRows);
-        string sql = SqlBuilder.BuildSelectAll(context.Table, limit);
+        // No LIMIT: the grid pages through the table, MaxRows rows at a time.
+        string sql = SqlBuilder.BuildTableQuery(context.Table, where: null, orderBy: null, descending: false);
 
         if (ActiveTab is null)
             AddTabCore(selectSql: sql);
@@ -195,7 +253,10 @@
             ActiveTab.Sql = sql;
             ActiveTab.Title = $"data:{context.Table}";
             ActiveTab.DataContext = context;
-            ActiveTab.LastResult = null;
+            ActiveTab.DataWhere = null;
+            ActiveTab.DataOrderBy = null;
+            ActiveTab.DataDescending = false;
+            ActiveTab.ClearResults();
             await PersistTabsAsync();
         }
 
@@ -203,7 +264,7 @@
 
         // Programmatic: run the SELECT we just wrote, not a selection left over from the old content.
         _hasSelection = false;
-        await RunCoreAsync(useSelection: false);
+        await RunCoreAsync(RunMode.Tab);
     }
 
     private void OnSessionChanged() => InvokeAsync(StateHasChanged);
@@ -312,14 +373,27 @@
         return Prefs.SaveTabsAsync(snapshot, _activeId, _tabSeq, debounce);
     }
 
-    /// <summary>Runs the editor selection when there is one, otherwise the whole tab.</summary>
-    private Task RunAsync() => RunCoreAsync(useSelection: true);
+    /// <summary>What a run executes.</summary>
+    private enum RunMode
+    {
+        /// <summary>The selection (each of its statements), or else the statement at the cursor.</summary>
+        Statement,
 
-    /// <param name="useSelection">
-    /// False for programmatic re-runs (a row edit refreshing its grid), which must always execute the
-    /// tab's own SQL — never whatever the user happens to have highlighted.
-    /// </param>
-    private async Task RunCoreAsync(bool useSelection)
+        /// <summary>Each statement of the selection, or else of the whole tab.</summary>
+        Script,
+
+        /// <summary>
+        /// The tab's own SQL, never the selection. For programmatic re-runs (a row edit refreshing its
+        /// grid), which must not execute whatever the user happens to have highlighted.
+        /// </summary>
+        Tab,
+    }
+
+    private Task RunAsync() => RunCoreAsync(RunMode.Statement);
+
+    private Task RunScriptAsync() => RunCoreAsync(RunMode.Script);
+
+    private async Task RunCoreAsync(RunMode mode)
     {
         if (ActiveTab is null || _running)
             return;
@@ -330,16 +404,23 @@
             return;
         }
 
-        await PersistActiveEditorAsync();
+        // A programmatic run has just written the tab's SQL, and the editor can still show the old text
+        // until it renders again. Reading the editor back then would replace the new SQL with the old.
+        if (mode != RunMode.Tab)
+            await PersistActiveEditorAsync();
 
-        string tabSql = ActiveTab.Sql?.Trim() ?? "";
+        QueryTab tab = ActiveTab;
+        string tabSql = tab.Sql ?? "";
 
         string? selected = null;
-        if (useSelection && _editor is not null)
+        int? cursor = null;
+        if (mode != RunMode.Tab && _editor is not null)
         {
             try
             {
                 selected = await _editor.GetSelectedTextAsync();
+                if (selected is null && mode == RunMode.Statement)
+                    cursor = await _editor.GetCursorOffsetAsync();
             }
             catch
             {
@@ -347,29 +428,67 @@
             }
         }
 
-        string sql = selected?.Trim() ?? tabSql;
-        if (sql.Length == 0)
+        List<string> statements;
+        if (selected is not null)
+            statements = SqlScript.Split(selected).Select(st => st.Text).ToList();
+        else if (mode == RunMode.Statement && cursor is int offset)
+            statements = SqlScript.StatementAt(tabSql, offset) is { } current ? [current.Text] : [];
+        else
+            statements = SqlScript.Split(tabSql).Select(st => st.Text).ToList();
+
+        if (statements.Count == 0)
         {
             Snackbar.Add("SQL is empty.", Severity.Warning);
             return;
         }
 
         // The title names the tab, so keep it on the tab's own SQL rather than the selected fragment.
-        if (ActiveTab.DataContext is null && selected is null)
-            ActiveTab.Title = TruncateTitle(tabSql);
+        if (tab.DataContext is null && selected is null)
+            tab.Title = TruncateTitle(tabSql);
 
         await PersistTabsAsync();
 
         _running = true;
         _cts = new CancellationTokenSource();
+        CancellationToken token = _cts.Token;
+        tab.ClearResults();
         StateHasChanged();
 
         try
         {
-            QueryResultModel result = await Queries.ExecuteAsync(sql, _cts.Token);
-            ActiveTab.LastResult = result;
-            if (!result.Success)
-                Snackbar.Add(result.ErrorMessage ?? "Query failed", Severity.Error);
+            for (int i = 0; i < statements.Count; i++)
+            {
+                if (token.IsCancellationRequested)
+                {
+                    tab.SkippedStatements = statements.Count - i;
+                    break;
+                }
+
+                string sql = statements[i];
+                QueryResultModel result = await Queries.ExecutePagedAsync(sql, token);
+
+                tab.Results.Add(new StatementRun(sql, result));
+                tab.ActiveResult = tab.Results.Count - 1;
+
+                await History.AddAsync(sql, Session.Database, result);
+
+                if (result.Success && ChangesSchema(sql))
+                    Completion.Invalidate();
+
+                if (!result.Success)
+                {
+                    tab.SkippedStatements = statements.Count - i - 1;
+                    string where = statements.Count > 1 ? $"Statement {i + 1} of {statements.Count} failed: " : "";
+                    string skipped = tab.SkippedStatements > 0
+                        ? $" — {tab.SkippedStatements} statement{(tab.SkippedStatements == 1 ? " was" : "s were")} not run."
+                        : "";
+                    Snackbar.Add(where + (result.ErrorMessage ?? "Query failed") + skipped, Severity.Error);
+                    break;
+                }
+
+                if (statements.Count > 1)
+                    StateHasChanged();
+            }
         }
         finally
         {
@@ -380,7 +499,110 @@
         }
     }
 
-    private Task RefreshActiveDataAsync() => RunCoreAsync(useSelection: false);
+    /// <summary>A statement after which the cached table and column names can be out of date.</summary>
+    private static bool ChangesSchema(string sql) =>
+        SqlScript.FirstWord(sql) is "CREATE" or "ALTER" or "DROP" or "RENAME" or "TRUNCATE";
+
+    private Task RefreshActiveDataAsync() => RunCoreAsync(RunMode.Tab);
+
+    /// <summary>Gets the next page of the shown result and adds its rows to the grid.</summary>
+    private async Task FetchMoreAsync()
+    {
+        QueryTab? tab = ActiveTab;
+        if (tab is null || _running || tab.ActiveResult >= tab.Results.Count)
+            return;
+
+        int index = tab.ActiveResult;
+        StatementRun run = tab.Results[index];
+        if (!run.Result.HasMore)
+            return;
+
+        _running = true;
+        _cts = new CancellationTokenSource();
+        StateHasChanged();
+
+        try
+        {
+            QueryResultModel more = await Queries.FetchMoreAsync(run.Result, _cts.Token);
+            if (!more.Success)
+            {
+                Snackbar.Add(more.ErrorMessage ?? "Could not get the next rows.", Severity.Error);
+                return;
+            }
+
+            // The tab can have run again while the page was loading; then the page belongs to nothing.
+            if (index < tab.Results.Count && ReferenceEquals(tab.Results[index], run))
+                tab.Results[index] = run with { Result = more };
+        }
+        finally
+        {
+            _running = false;
+            _cts?.Dispose();
+            _cts = null;
+            StateHasChanged();
+        }
+    }
+
+    private async Task ApplyDataFilterAsync(string where)
+    {
+        QueryTab? tab = ActiveTab;
+        if (tab?.DataContext is null || _running)
+            return;
+
+        string? condition = string.IsNullOrWhiteSpace(where) ? null : where.Trim();
+        string sql = SqlBuilder.BuildTableQuery(tab.DataContext.Table, condition, tab.DataOrderBy, tab.DataDescending);
+
+        // The condition is written into the statement as typed. A ';' would make it two statements.
+        if (SqlScript.Split(sql).Count != 1)
+        {
+            Snackbar.Add("The filter must be one condition, without ';'.", Severity.Warning);
+            return;
+        }
+
+        tab.DataWhere = condition;
+        await RunDataQueryAsync(tab, sql);
+    }
+
+    private async Task ApplyDataSortAsync(GridSort sort)
+    {
+        QueryTab? tab = ActiveTab;
+        if (tab?.DataContext is null || _running)
+            return;
+
+        tab.DataOrderBy = sort.Column;
+        tab.DataDescending = sort.Column is not null && sort.Descending;
+        string sql = SqlBuilder.BuildTableQuery(tab.DataContext.Table, tab.DataWhere, tab.DataOrderBy, tab.DataDescending);
+        await RunDataQueryAsync(tab, sql);
+    }
+
+    /// <summary>Writes the data tab's new query into its editor, as the SQL the grid shows, and runs it.</summary>
+    private async Task RunDataQueryAsync(QueryTab tab, string sql)
+    {
+        tab.Sql = sql;
+        await PersistTabsAsync();
+        _hasSelection = false;
+        StateHasChanged();
+        await RunCoreAsync(RunMode.Tab);
+    }
+
+    private async Task OpenHistoryAsync()
+    {
+        var options = new DialogOptions
+        {
+            CloseOnEscapeKey = true,
+            MaxWidth = MaxWidth.Large,
+            FullWidth = true,
+        };
+
+        IDialogReference dialog = await DialogService.ShowAsync<QueryHistoryDialog>("Query history", options);
+        DialogResult? result = await dialog.Result;
+        if (result is { Canceled: false, Data: string sql })
+        {
+            await PersistActiveEditorAsync();
+            AddTabCore(selectSql: sql);
+            StateHasChanged();
+        }
+    }
 
     private void CancelRun() => _cts?.Cancel();
 
@@ -421,6 +643,7 @@
         Session.Changed -= OnSessionChanged;
         _cts?.Cancel();
         _cts?.Dispose();
+        _completionRef?.Dispose();
 
         if (_hydrated && _tabs.Count > 0)
         {
@@ -434,7 +657,36 @@
         public required string Id { get; init; }
         public string Title { get; set; } = "SQL";
         public string Sql { get; set; } = "";
-        public QueryResultModel? LastResult { get; set; }
+
+        /// <summary>One entry for each statement of the last run, in order.</summary>
+        public List<StatementRun> Results { get; } = [];
+
+        /// <summary>The index in <see cref="Results"/> of the result the grid shows.</summary>
+        public int ActiveResult { get; set; }
+
+        /// <summary>The statements of the last run that did not run, after a failure or a stop.</summary>
+        public int SkippedStatements { get; set; }
+
+        public QueryResultModel? LastResult =>
+            ActiveResult < Results.Count ? Results[ActiveResult].Result : null;
+
         public TableDataContext? DataContext { get; set; }
+
+        /// <summary>The WHERE condition of a data tab, or null.</summary>
+        public string? DataWhere { get; set; }
+
+        /// <summary>The ORDER BY column of a data tab, or null.</summary>
+        public string? DataOrderBy { get; set; }
+
+        public bool DataDescending { get; set; }
+
+        public void ClearResults()
+        {
+            Results.Clear();
+            ActiveResult = 0;
+            SkippedStatements = 0;
+        }
     }
+
+    private sealed record StatementRun(string Sql, QueryResultModel Result);
 }

@@ -4,6 +4,7 @@
 @inject ConsolePreferencesService Prefs
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
+@inject SchemaCompletionSource Completion
 @implements IDisposable
 
 <div class="schema-drawer-host">
@@ -80,12 +81,16 @@
                         </ActivatorContent>
                         <ChildContent>
                             <MudMenuItem Icon="@Icons.Material.Filled.Add"
-                                         OnClick="() => CreateTableAsync(db)">
+                                         OnClick="() => Defer(() => CreateTableAsync(db))">
                                 Create a Table
+                            </MudMenuItem>
+                            <MudMenuItem Icon="@Icons.Material.Filled.DriveFileRenameOutline"
+                                         OnClick="() => Defer(() => RenameDatabaseAsync(db))">
+                                Rename Database
                             </MudMenuItem>
                             <MudMenuItem Icon="@Icons.Material.Filled.Delete"
                                          IconColor="Color.Error"
-                                         OnClick="() => DropDatabaseAsync(db)">
+                                         OnClick="() => Defer(() => DropDatabaseAsync(db))">
                                 Drop Database
                             </MudMenuItem>
                         </ChildContent>
@@ -131,32 +136,36 @@
                                         </ActivatorContent>
                                         <ChildContent>
                                             <MudMenuItem Icon="@Icons.Material.Filled.TableView"
-                                                         OnClick="() => EditViewDataAsync(db, table)">
+                                                         OnClick="() => Defer(() => EditViewDataAsync(db, table))">
                                                 Edit/View Data
+                                            </MudMenuItem>
+                                            <MudMenuItem Icon="@Icons.Material.Filled.DriveFileRenameOutline"
+                                                         OnClick="() => Defer(() => RenameTableAsync(db, table))">
+                                                Rename Table
                                             </MudMenuItem>
                                             <MudMenuItem Icon="@Icons.Material.Filled.Delete"
                                                          IconColor="Color.Error"
-                                                         OnClick="() => DropTableAsync(db, table)">
+                                                         OnClick="() => Defer(() => DropTableAsync(db, table))">
                                                 Drop Table
                                             </MudMenuItem>
                                             <MudMenuItem Icon="@Icons.Material.Filled.FileDownload"
-                                                         OnClick="() => ExportTableAsync(db, table)">
+                                                         OnClick="() => Defer(() => ExportTableAsync(db, table))">
                                                 Export Table
                                             </MudMenuItem>
                                             <MudMenuItem Icon="@Icons.Material.Filled.ViewColumn"
-                                                         OnClick="() => AddColumnAsync(db, table)">
+                                                         OnClick="() => Defer(() => AddColumnAsync(db, table))">
                                                 Add a Column
                                             </MudMenuItem>
                                             <MudMenuItem Icon="@Icons.Material.Filled.Key"
-                                                         OnClick="() => AddIndexAsync(db, table)">
+                                                         OnClick="() => Defer(() => AddIndexAsync(db, table))">
                                                 Add an Index
                                             </MudMenuItem>
                                             <MudMenuItem Icon="@Icons.Material.Filled.Link"
-                                                         OnClick="() => AddForeignKeyAsync(db, table)">
+                                                         OnClick="() => Defer(() => AddForeignKeyAsync(db, table))">
                                                 Add a Foreign Key
                                             </MudMenuItem>
                                             <MudMenuItem Icon="@Icons.Material.Filled.Comment"
-                                                         OnClick="() => EditCommentsAsync(db, table)">
+                                                         OnClick="() => Defer(() => EditCommentsAsync(db, table))">
                                                 Edit Comments
                                             </MudMenuItem>
                                         </ChildContent>
@@ -173,27 +182,59 @@
                                             {
                                                 @foreach (ColumnSchemaInfo col in table.Columns)
                                                 {
-                                                    <div class="schema-node" title="@col.Name">
-                                                        <span style="width:20px;display:inline-block;"></span>
-                                                        <MudIcon Icon="@Icons.Material.Filled.DataObject" Size="Size.Small" />
-                                                        <span class="schema-node-label">@col.Name</span>
-                                                        @if (!string.IsNullOrEmpty(col.Type))
-                                                        {
-                                                            <span class="schema-node-detail">@col.Type</span>
-                                                        }
-                                                    </div>
+                                                    <MudMenu ActivationEvent="MudBlazor.MouseEvent.RightClick"
+                                                             PositionAtCursor="true"
+                                                             Dense="true"
+                                                             Class="schema-context-menu-host">
+                                                        <ActivatorContent>
+                                                            <div class="schema-node"
+                                                                 @oncontextmenu="context.ToggleAsync"
+                                                                 @oncontextmenu:preventDefault="true"
+                                                                 title="@col.Name">
+                                                                <span style="width:20px;display:inline-block;"></span>
+                                                                <MudIcon Icon="@Icons.Material.Filled.DataObject" Size="Size.Small" />
+                                                                <span class="schema-node-label">@col.Name</span>
+                                                                @if (!string.IsNullOrEmpty(col.Type))
+                                                                {
+                                                                    <span class="schema-node-detail">@col.Type</span>
+                                                                }
+                                                            </div>
+                                                        </ActivatorContent>
+                                                        <ChildContent>
+                                                            <MudMenuItem Icon="@Icons.Material.Filled.DriveFileRenameOutline"
+                                                                         OnClick="() => Defer(() => RenameColumnAsync(db, table, col))">
+                                                                Rename Column
+                                                            </MudMenuItem>
+                                                        </ChildContent>
+                                                    </MudMenu>
                                                 }
                                                 @foreach (IndexSchemaInfo idx in table.Indexes)
                                                 {
-                                                    <div class="schema-node" title="@idx.Name">
-                                                        <span style="width:20px;display:inline-block;"></span>
-                                                        <MudIcon Icon="@Icons.Material.Filled.Key" Size="Size.Small" />
-                                                        <span class="schema-node-label">@idx.Name</span>
-                                                        @if (!string.IsNullOrEmpty(idx.Columns))
-                                                        {
-                                                            <span class="schema-node-detail">@idx.Columns</span>
-                                                        }
-                                                    </div>
+                                                    <MudMenu ActivationEvent="MudBlazor.MouseEvent.RightClick"
+                                                             PositionAtCursor="true"
+                                                             Dense="true"
+                                                             Class="schema-context-menu-host">
+                                                        <ActivatorContent>
+                                                            <div class="schema-node"
+                                                                 @oncontextmenu="context.ToggleAsync"
+                                                                 @oncontextmenu:preventDefault="true"
+                                                                 title="@idx.Name">
+                                                                <span style="width:20px;display:inline-block;"></span>
+                                                                <MudIcon Icon="@Icons.Material.Filled.Key" Size="Size.Small" />
+                                                                <span class="schema-node-label">@idx.Name</span>
+                                                                @if (!string.IsNullOrEmpty(idx.Columns))
+                                                                {
+                                                                    <span class="schema-node-detail">@idx.Columns</span>
+                                                                }
+                                                            </div>
+                                                        </ActivatorContent>
+                                                        <ChildContent>
+                                                            <MudMenuItem Icon="@Icons.Material.Filled.DriveFileRenameOutline"
+                                                                         OnClick="() => Defer(() => RenameIndexAsync(db, table, idx))">
+                                                                Rename Index
+                                                            </MudMenuItem>
+                                                        </ChildContent>
+                                                    </MudMenu>
                                                 }
                                                 @foreach (ForeignKeySchemaInfo fk in table.ForeignKeys)
                                                 {
@@ -215,7 +256,7 @@
                                                         <ChildContent>
                                                             <MudMenuItem Icon="@Icons.Material.Filled.Delete"
                                                                          IconColor="Color.Error"
-                                                                         OnClick="() => DropForeignKeyAsync(db, table, fk)">
+                                                                         OnClick="() => Defer(() => DropForeignKeyAsync(db, table, fk))">
                                                                 Drop Constraint
                                                             </MudMenuItem>
                                                         </ChildContent>
@@ -251,12 +292,16 @@
                                         </ActivatorContent>
                                         <ChildContent>
                                             <MudMenuItem Icon="@Icons.Material.Filled.Code"
-                                                         OnClick="() => ShowCreateSequenceAsync(seq)">
+                                                         OnClick="() => Defer(() => ShowCreateSequenceAsync(seq))">
                                                 Show Create Sequence
+                                            </MudMenuItem>
+                                            <MudMenuItem Icon="@Icons.Material.Filled.DriveFileRenameOutline"
+                                                         OnClick="() => Defer(() => RenameSequenceAsync(db, seq))">
+                                                Rename Sequence
                                             </MudMenuItem>
                                             <MudMenuItem Icon="@Icons.Material.Filled.Delete"
                                                          IconColor="Color.Error"
-                                                         OnClick="() => DropSequenceAsync(db, seq)">
+                                                         OnClick="() => Defer(() => DropSequenceAsync(db, seq))">
                                                 Drop Sequence
                                             </MudMenuItem>
                                         </ChildContent>
@@ -598,6 +643,13 @@
     private Task InsertSelectAsync(string table) =>
         OnInsertSql.InvokeAsync($"SELECT * FROM {table}\nLIMIT 100");
 
+    /// <summary>
+    /// Starts a menu action without making the menu wait for it. MudMenuItem awaits its OnClick
+    /// before it closes the menu, and most actions await a dialog, so the menu stayed open behind
+    /// the dialog. Each action catches and reports its own errors.
+    /// </summary>
+    private void Defer(Func<Task> action) => _ = InvokeAsync(action);
+
     private static DialogOptions DialogOptions => new()
     {
         CloseOnEscapeKey = true,
@@ -922,6 +974,149 @@
             };
 
             await DialogService.ShowAsync<TableCommentsDialog>("Comments", parameters, WideDialogOptions);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    /// <summary>
+    /// Opens the rename dialog, which runs the statement itself. Returns the new name, or null when
+    /// the user cancelled. Each rename can make the editor's cached names out of date.
+    /// </summary>
+    private async Task<string?> RenameAsync(
+        string kind,
+        string currentName,
+        IEnumerable<string> siblings,
+        Func<string, string> buildSql,
+        string? warning = null)
+    {
+        var parameters = new DialogParameters<RenameDialog>
+        {
+            { x => x.Kind, kind },
+            { x => x.CurrentName, currentName },
+            { x => x.SiblingNames, siblings.ToList() },
+            { x => x.BuildSql, buildSql },
+            { x => x.Warning, warning },
+        };
+
+        IDialogReference dialog = await DialogService.ShowAsync<RenameDialog>($"Rename {kind}", parameters, DialogOptions);
+        DialogResult? result = await dialog.Result;
+        if (result is not { Canceled: false, Data: string newName })
+            return null;
+
+        Completion.Invalidate();
+        Snackbar.Add($"Renamed {kind} '{currentName}' to '{newName}'.", Severity.Success);
+        return newName;
+    }
+
+    private const string QueryWarning =
+        "Saved queries, open tabs and the query history keep the old name. Update them by hand.";
+
+    private async Task RenameDatabaseAsync(DbEntry db)
+    {
+        try
+        {
+            bool wasActive = IsActiveDatabase(db);
+            string? newName = await RenameAsync(
+                "database",
+                db.Name,
+                _databases.Select(d => d.Name),
+                n => SqlBuilder.BuildRenameDatabase(db.Name, n),
+                "Clients that connect to this database by name must use the new name.");
+            if (newName is null)
+                return;
+
+            // The session still points at the old name, which no longer exists.
+            if (wasActive)
+            {
+                await Session.ChangeDatabaseAsync(newName, notify: true);
+                await Prefs.SetDatabaseAsync(Session.Database);
+            }
+
+            await RefreshAsync();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    private async Task RenameTableAsync(DbEntry db, TableEntry table)
+    {
+        try
+        {
+            await Session.ChangeDatabaseAsync(db.Name, notify: true);
+            string? newName = await RenameAsync(
+                "table",
+                table.Name,
+                db.Tables.Select(t => t.Name),
+                n => SqlBuilder.BuildRenameTable(table.Name, n),
+                QueryWarning);
+            if (newName is not null)
+                await ReloadDatabaseTablesAsync(db);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    private async Task RenameColumnAsync(DbEntry db, TableEntry table, ColumnSchemaInfo column)
+    {
+        try
+        {
+            await Session.ChangeDatabaseAsync(db.Name, notify: true);
+            string? newName = await RenameAsync(
+                "column",
+                column.Name,
+                table.Columns.Select(c => c.Name),
+                n => SqlBuilder.BuildRenameColumn(table.Name, column.Name, n),
+                QueryWarning);
+            if (newName is not null)
+                await ReloadTableDetailsAsync(db, table);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    private async Task RenameIndexAsync(DbEntry db, TableEntry table, IndexSchemaInfo index)
+    {
+        try
+        {
+            await Session.ChangeDatabaseAsync(db.Name, notify: true);
+            string? newName = await RenameAsync(
+                "index",
+                index.Name,
+                table.Indexes.Select(i => i.Name),
+                n => SqlBuilder.BuildRenameIndex(table.Name, index.Name, n));
+            if (newName is not null)
+                await ReloadTableDetailsAsync(db, table);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    private async Task RenameSequenceAsync(DbEntry db, SequenceSchemaInfo seq)
+    {
+        try
+        {
+            await Session.ChangeDatabaseAsync(db.Name, notify: true);
+            string? newName = await RenameAsync(
+                "sequence",
+                seq.Name,
+                db.Sequences.Select(s => s.Name),
+                n => SqlBuilder.BuildRenameSequence(seq.Name, n),
+                // The server rewrites a column DEFAULT nextval('…') to the new name; SQL text it does not
+                // own does not change.
+                QueryWarning);
+            if (newName is not null)
+                await ReloadDatabaseTablesAsync(db);
         }
         catch (Exception ex)
         {

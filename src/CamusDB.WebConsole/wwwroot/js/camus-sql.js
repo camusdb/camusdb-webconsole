@@ -296,6 +296,165 @@
         colors: {},
     };
 
+    /*
+     * Schema-aware completion. QueryWorkspace hands over a DotNetObjectReference to
+     * SchemaCompletionSource, which answers GetTables() and GetColumns(table) from SHOW TABLES and
+     * SHOW COLUMNS and caches both on the server side. Without a source (not connected, or the
+     * circuit is gone) the list holds keywords, types and functions only.
+     */
+    let completionSource = null;
+
+    function setCompletionSource(source) {
+        completionSource = source || null;
+    }
+
+    async function callSource(method, ...args) {
+        if (!completionSource)
+            return [];
+        try {
+            return (await completionSource.invokeMethodAsync(method, ...args)) || [];
+        } catch {
+            return [];
+        }
+    }
+
+    // Upper-case words that a bare identifier must not use. A name in this set, or a name that is
+    // not a plain identifier, is inserted with backticks.
+    const reserved = new Set([...definition.keywords, ...definition.operators].map(w => w.toUpperCase()));
+
+    function quoteName(name, afterBacktick) {
+        if (afterBacktick)
+            return name;
+        return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) && !reserved.has(name.toUpperCase())
+            ? name
+            : '`' + name.replace(/`/g, '') + '`';
+    }
+
+    function unquote(name) {
+        return name.length >= 2 && name[0] === '`' && name[name.length - 1] === '`' ? name.slice(1, -1) : name;
+    }
+
+    /*
+     * The bounds of the statement around `offset`, cut at each ';' outside strings, backtick names
+     * and comments. These are the lexer's rules, as in SqlScript.cs; an E'...' string is read as a
+     * plain string here, which can only make the bounds a little wrong for completion.
+     */
+    function statementBounds(text, offset) {
+        let start = 0;
+        let i = 0;
+        while (i < text.length) {
+            const c = text[i];
+            if (c === '-' && text[i + 1] === '-') {
+                const end = text.indexOf('\n', i);
+                i = end < 0 ? text.length : end;
+                continue;
+            }
+            if (c === '/' && text[i + 1] === '*') {
+                const end = text.indexOf('*/', i + 2);
+                i = end < 0 ? text.length : end + 2;
+                continue;
+            }
+            if (c === "'" || c === '"' || c === '`') {
+                i++;
+                while (i < text.length) {
+                    if (text[i] === c) {
+                        if (c !== '`' && text[i + 1] === c) { i += 2; continue; }
+                        break;
+                    }
+                    i++;
+                }
+                i++;
+                continue;
+            }
+            if (c === ';') {
+                if (i >= offset)
+                    return { start, end: i };
+                start = i + 1;
+            }
+            i++;
+        }
+        return { start, end: text.length };
+    }
+
+    // Words after which a name can follow but is not a table alias.
+    const notAlias = new Set(['WHERE', 'JOIN', 'INNER', 'LEFT', 'RIGHT', 'OUTER', 'CROSS', 'ON', 'GROUP',
+        'ORDER', 'LIMIT', 'OFFSET', 'SET', 'VALUES', 'HAVING', 'AS', 'USING', 'RETURNING', 'SELECT']);
+
+    /** Maps each alias and each table name of the statement to its table. */
+    function tableReferences(statement) {
+        const refs = new Map();
+        const pattern = /\b(?:FROM|JOIN|UPDATE|INTO)\s+(`[^`]+`|[A-Za-z_][A-Za-z0-9_]*)(?:\s+(?:AS\s+)?(`[^`]+`|[A-Za-z_][A-Za-z0-9_]*))?/gi;
+        let match;
+        while ((match = pattern.exec(statement)) !== null) {
+            const table = unquote(match[1]);
+            if (reserved.has(table.toUpperCase()) && !match[1].startsWith('`'))
+                continue;
+            refs.set(table.toLowerCase(), table);
+            if (match[2] && !notAlias.has(match[2].toUpperCase()))
+                refs.set(unquote(match[2]).toLowerCase(), table);
+        }
+        return refs;
+    }
+
+    function columnItems(columns, table, range, afterBacktick, Kind, sortPrefix) {
+        return columns.map(col => ({
+            label: col.name,
+            kind: Kind.Field,
+            insertText: quoteName(col.name, afterBacktick),
+            detail: `${table} · ${col.type || ''}${col.primaryKey ? ' · PK' : ''}`,
+            sortText: sortPrefix + col.name,
+            range,
+        }));
+    }
+
+    async function provideItems(model, position, Kind, staticItems) {
+        const word = model.getWordUntilPosition(position);
+        const range = {
+            startLineNumber: position.lineNumber,
+            endLineNumber: position.lineNumber,
+            startColumn: word.startColumn,
+            endColumn: word.endColumn,
+        };
+        const keywords = staticItems.map(s => ({ ...s, range }));
+
+        const text = model.getValue();
+        const offset = model.getOffsetAt(position);
+        const bounds = statementBounds(text, offset);
+        const statement = text.slice(bounds.start, bounds.end);
+        const before = text.slice(bounds.start, offset - word.word.length);
+        const afterBacktick = before.endsWith('`');
+        const refs = tableReferences(statement);
+
+        // `alias.` or `table.`: only the columns of that table.
+        const qualified = /(`[^`]+`|[A-Za-z_][A-Za-z0-9_]*)\.`?$/.exec(before);
+        if (qualified) {
+            const name = unquote(qualified[1]);
+            const table = refs.get(name.toLowerCase()) || name;
+            const columns = await callSource('GetColumns', table);
+            return { suggestions: columnItems(columns, table, range, afterBacktick, Kind, '0') };
+        }
+
+        const tables = await callSource('GetTables');
+        const tableItems = tables.map(t => ({
+            label: t,
+            kind: Kind.Class,
+            insertText: quoteName(t, afterBacktick),
+            detail: 'table',
+            sortText: '1' + t,
+            range,
+        }));
+
+        // After FROM, JOIN, INTO, UPDATE or TABLE the next word is a table name.
+        if (/\b(?:FROM|JOIN|INTO|UPDATE|TABLE|DESCRIBE|TRUNCATE)\s+`?$/i.test(before))
+            return { suggestions: [...tableItems.map(t => ({ ...t, sortText: '0' + t.label })), ...keywords] };
+
+        const referenced = [...new Set(refs.values())];
+        const columnLists = await Promise.all(referenced.map(t => callSource('GetColumns', t)));
+        const columns = columnLists.flatMap((list, i) => columnItems(list, referenced[i], range, afterBacktick, Kind, '0'));
+
+        return { suggestions: [...columns, ...tableItems, ...keywords] };
+    }
+
     let registered = false;
 
     function register() {
@@ -329,21 +488,12 @@
                 insertTextRules: languages.CompletionItemInsertTextRule.InsertAsSnippet,
                 detail: 'CamusDB function',
             })),
-        ];
+        ].map(s => ({ ...s, sortText: '3' + s.label }));
 
         languages.registerCompletionItemProvider(LANGUAGE_ID, {
-            provideCompletionItems: (model, position) => {
-                const word = model.getWordUntilPosition(position);
-                const range = {
-                    startLineNumber: position.lineNumber,
-                    endLineNumber: position.lineNumber,
-                    startColumn: word.startColumn,
-                    endColumn: word.endColumn,
-                };
-                return { suggestions: suggestions.map(s => ({ ...s, range })) };
-            },
+            triggerCharacters: ['.'],
+            provideCompletionItems: (model, position) => provideItems(model, position, Kind, suggestions),
         });
-
         registered = true;
         return true;
     }
@@ -388,5 +538,10 @@
         }
     }
 
-    window.camusSql = { languageId: LANGUAGE_ID, ensureRegistered: register, applyToEditor: applyToEditor };
+    window.camusSql = {
+        languageId: LANGUAGE_ID,
+        ensureRegistered: register,
+        applyToEditor: applyToEditor,
+        setCompletionSource: setCompletionSource,
+    };
 })();

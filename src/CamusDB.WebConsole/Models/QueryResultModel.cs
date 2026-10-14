@@ -27,6 +27,15 @@ public sealed class QueryResultModel
 
     public int MaxRows { get; init; }
 
+    /// <summary>
+    /// The <c>SELECT</c> that the grid pages through, without the <c>LIMIT</c> and <c>OFFSET</c> that the
+    /// console adds. Null when the statement is not pageable.
+    /// </summary>
+    public string? PageSql { get; init; }
+
+    /// <summary>True when the server has more rows after <see cref="Rows"/> for <see cref="PageSql"/>.</summary>
+    public bool HasMore { get; init; }
+
     public TimeSpan ExecuteDuration { get; init; }
 
     public TimeSpan TotalDuration { get; init; }
@@ -49,3 +58,6 @@ public sealed class QueryResultModel
         ExecuteDuration = total,
     };
 }
+
+/// <summary>A sort the grid asks for: a column and a direction. A null column means no sort.</summary>
+public readonly record struct GridSort(string? Column, bool Descending);

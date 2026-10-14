@@ -36,7 +36,53 @@ public sealed class QueryExecutionService
         _session = session;
     }
 
-    public async Task<QueryResultModel> ExecuteAsync(string sql, CancellationToken cancellationToken = default)
+    public Task<QueryResultModel> ExecuteAsync(string sql, CancellationToken cancellationToken = default) =>
+        ExecuteCoreAsync(sql, paged: false, cancellationToken);
+
+    /// <summary>
+    /// Runs one statement for the results grid. A <c>SELECT</c> without its own <c>LIMIT</c> or
+    /// <c>OFFSET</c> gets the first page only (<c>MaxRows</c> rows), and <see cref="FetchMoreAsync"/>
+    /// gets the next pages. Each other statement runs as <see cref="ExecuteAsync"/> runs it.
+    /// </summary>
+    public Task<QueryResultModel> ExecutePagedAsync(string sql, CancellationToken cancellationToken = default) =>
+        ExecuteCoreAsync(sql, paged: true, cancellationToken);
+
+    /// <summary>
+    /// Gets the page after the rows of <paramref name="previous"/> and returns a result that holds
+    /// all the rows. The new page starts at <c>OFFSET</c> equal to the rows already loaded. Without an
+    /// <c>ORDER BY</c> the server does not promise the same row order on each call, so a row can
+    /// show twice or not at all. That is also true in other SQL clients.
+    /// </summary>
+    public async Task<QueryResultModel> FetchMoreAsync(QueryResultModel previous, CancellationToken cancellationToken = default)
+    {
+        Stopwatch total = Stopwatch.StartNew();
+
+        if (previous.PageSql is null || !previous.HasMore)
+            return previous;
+
+        if (!_session.IsConnected)
+            return QueryResultModel.Failure("Not connected to CamusDB.", null, total.Elapsed);
+
+        try
+        {
+            return await ExecutePageAsync(_session.GetConnection(), previous.PageSql, previous, total, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return QueryResultModel.Failure("Query cancelled.", null, total.Elapsed);
+        }
+        catch (CamusException ex)
+        {
+            return QueryResultModel.Failure(CamusSessionService.Describe(ex), ex.Code, total.Elapsed);
+        }
+        catch (Exception ex)
+        {
+            return QueryResultModel.Failure(ex.Message, null, total.Elapsed);
+        }
+    }
+
+    private async Task<QueryResultModel> ExecuteCoreAsync(string sql, bool paged, CancellationToken cancellationToken)
     {
         Stopwatch total = Stopwatch.StartNew();
 
@@ -82,15 +128,18 @@ public sealed class QueryExecutionService
                     }).ConfigureAwait(false);
             }
 
+            if (paged && SqlScript.IsPageableSelect(sql))
+                return await ExecutePageAsync(connection, sql.Trim(), previous: null, total, cancellationToken).ConfigureAwait(false);
+
             await using CamusCommand command = connection.CreateCamusCommand(sql);
 
             if (IsResultSetStatement(sql))
-                return await ExecuteReaderAsync(command, total, insertReturning: false, explain: IsExplainStatement(sql), cancellationToken).ConfigureAwait(false);
+                return await ExecuteReaderAsync(command, total, _session.MaxRows, insertReturning: false, explain: IsExplainStatement(sql), cancellationToken).ConfigureAwait(false);
 
             // ExecuteNonQuery asks the server to discard the RETURNING rows, so the reader path is the
             // one that shows them.
             if (IsInsertReturning(sql))
-                return await ExecuteReaderAsync(command, total, insertReturning: true, explain: false, cancellationToken).ConfigureAwait(false);
+                return await ExecuteReaderAsync(command, total, _session.MaxRows, insertReturning: true, explain: false, cancellationToken).ConfigureAwait(false);
 
             return await ExecuteNonQueryAsync(command, total, cancellationToken).ConfigureAwait(false);
         }
@@ -129,14 +178,54 @@ public sealed class QueryExecutionService
         };
     }
 
-    private async Task<QueryResultModel> ExecuteReaderAsync(
+    /// <summary>
+    /// Runs <paramref name="sql"/> with <c>LIMIT pageSize + 1</c>. The extra row only tells that a next
+    /// page exists, and the grid does not show it.
+    /// </summary>
+    private async Task<QueryResultModel> ExecutePageAsync(
+        CamusConnection connection,
+        string sql,
+        QueryResultModel? previous,
+        Stopwatch total,
+        CancellationToken cancellationToken)
+    {
+        int pageSize = Math.Max(1, _session.MaxRows);
+        int offset = previous?.Rows.Count ?? 0;
+
+        await using CamusCommand command = connection.CreateCamusCommand(SqlScript.WithPage(sql, pageSize + 1, offset));
+        QueryResultModel page = await ExecuteReaderAsync(command, total, pageSize, insertReturning: false, explain: false, cancellationToken)
+            .ConfigureAwait(false);
+
+        List<object?[]> rows = previous is null ? [] : [.. previous.Rows];
+        rows.AddRange(page.Rows);
+
+        // Truncated means "more rows exist" here, because the query asked for one row more than a page.
+        bool hasMore = page.Truncated;
+
+        return new QueryResultModel
+        {
+            Success = true,
+            IsResultSet = true,
+            Columns = previous?.Columns ?? page.Columns,
+            Rows = rows,
+            RowsReturned = rows.Count,
+            MaxRows = pageSize,
+            ExecuteDuration = page.ExecuteDuration,
+            TotalDuration = page.TotalDuration,
+            Message = hasMore ? $"Showing the first {rows.Count:N0} rows. More rows are available." : null,
+            PageSql = sql,
+            HasMore = hasMore,
+        };
+    }
+
+    private static async Task<QueryResultModel> ExecuteReaderAsync(
         CamusCommand command,
         Stopwatch total,
+        int maxRows,
         bool insertReturning,
         bool explain,
         CancellationToken cancellationToken)
     {
-        int maxRows = _session.MaxRows;
         Stopwatch execute = Stopwatch.StartNew();
 
         await using CamusDataReader reader =
@@ -255,85 +344,7 @@ public sealed class QueryExecutionService
     /// <c>@parameters</c>. The lexer reserves RETURNING, so a bare word is always the clause; a
     /// column called <c>returning</c> has to be backticked.
     /// </summary>
-    internal static bool HasReturningKeyword(string sql)
-    {
-        int i = 0;
-        while (i < sql.Length)
-        {
-            char c = sql[i];
-
-            if (c is '\'' or '"' or '`')
-            {
-                i = SkipQuoted(sql, i, c);
-                continue;
-            }
-
-            if (c == '-' && i + 1 < sql.Length && sql[i + 1] == '-')
-            {
-                int end = sql.IndexOf('\n', i);
-                i = end < 0 ? sql.Length : end + 1;
-                continue;
-            }
-
-            if (c == '/' && i + 1 < sql.Length && sql[i + 1] == '*')
-            {
-                int end = sql.IndexOf("*/", i + 2, StringComparison.Ordinal);
-                i = end < 0 ? sql.Length : end + 2;
-                continue;
-            }
-
-            if (char.IsAsciiLetter(c) || c is '_' or '@')
-            {
-                int start = i;
-                i++;
-                while (i < sql.Length && (char.IsAsciiLetterOrDigit(sql[i]) || sql[i] == '_'))
-                    i++;
-
-                if (c != '@' && sql.AsSpan(start, i - start).Equals("RETURNING", StringComparison.OrdinalIgnoreCase))
-                    return true;
-
-                continue;
-            }
-
-            i++;
-        }
-
-        return false;
-    }
-
-    /// <summary>
-    /// Steps past a quoted run that opens at <paramref name="start"/>. A doubled quote stays inside the
-    /// run, and so does a backslash escape in a string literal (the lexer's EscChr).
-    /// </summary>
-    private static int SkipQuoted(string sql, int start, char quote)
-    {
-        int i = start + 1;
-        while (i < sql.Length)
-        {
-            char c = sql[i];
-
-            if (c == '\\' && quote != '`')
-            {
-                i += 2;
-                continue;
-            }
-
-            if (c == quote)
-            {
-                if (i + 1 < sql.Length && sql[i + 1] == quote)
-                {
-                    i += 2;
-                    continue;
-                }
-
-                return i + 1;
-            }
-
-            i++;
-        }
-
-        return sql.Length;
-    }
+    internal static bool HasReturningKeyword(string sql) => SqlScript.HasWord(sql, "RETURNING");
 
     private static bool TryParseCreateDatabase(
         string sql,

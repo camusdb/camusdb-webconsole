@@ -164,6 +164,49 @@ public static class SqlBuilder
         return $"SELECT * FROM {QuoteIdent(table)}\nLIMIT {Math.Max(1, limit)}";
     }
 
+    /// <summary>
+    /// The query of a data tab: <c>SELECT *</c> with the tab's optional filter and sort, and no
+    /// <c>LIMIT</c>, because the grid pages through it. <paramref name="where"/> is the user's own SQL
+    /// condition, written into the statement as typed.
+    /// </summary>
+    public static string BuildTableQuery(string table, string? where, string? orderBy, bool descending)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(table);
+
+        string sql = $"SELECT * FROM {QuoteIdent(table)}";
+        if (!string.IsNullOrWhiteSpace(where))
+            sql += $"\nWHERE {where.Trim()}";
+        if (!string.IsNullOrWhiteSpace(orderBy))
+            sql += $"\nORDER BY {QuoteIdent(orderBy)} {(descending ? "DESC" : "ASC")}";
+
+        return sql;
+    }
+
+    /// <summary>
+    /// True when <paramref name="name"/> is a name the lexer accepts: <c>[a-zA-Z_][a-zA-Z0-9_]*</c>.
+    /// A backticked name follows the same rule (EscIdentifier); backticks only let a reserved word be
+    /// a name. So a name with a space, a dash or a non-ASCII letter cannot exist at all.
+    /// </summary>
+    public static bool IsValidIdentifier(string? name) =>
+        !string.IsNullOrEmpty(name)
+        && (char.IsAsciiLetter(name[0]) || name[0] == '_')
+        && name.All(c => char.IsAsciiLetterOrDigit(c) || c == '_');
+
+    public static string BuildRenameDatabase(string database, string newName) =>
+        $"RENAME DATABASE {QuoteIdent(database)} TO {QuoteIdent(newName)}";
+
+    public static string BuildRenameTable(string table, string newName) =>
+        $"ALTER TABLE {QuoteIdent(table)} RENAME TO {QuoteIdent(newName)}";
+
+    public static string BuildRenameColumn(string table, string column, string newName) =>
+        $"ALTER TABLE {QuoteIdent(table)} RENAME COLUMN {QuoteIdent(column)} TO {QuoteIdent(newName)}";
+
+    public static string BuildRenameIndex(string table, string index, string newName) =>
+        $"ALTER TABLE {QuoteIdent(table)} RENAME INDEX {QuoteIdent(index)} TO {QuoteIdent(newName)}";
+
+    public static string BuildRenameSequence(string sequence, string newName) =>
+        $"ALTER SEQUENCE {QuoteIdent(sequence)} RENAME TO {QuoteIdent(newName)}";
+
     public static string BuildDropTable(string table)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(table);

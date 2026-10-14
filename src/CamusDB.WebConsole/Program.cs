@@ -44,6 +44,8 @@ builder.Services.AddScoped<CamusSessionService>();
 builder.Services.AddScoped<ConsolePreferencesService>();
 builder.Services.AddScoped<SchemaExplorerService>();
 builder.Services.AddScoped<QueryExecutionService>();
+builder.Services.AddScoped<QueryHistoryService>();
+builder.Services.AddScoped<SchemaCompletionSource>();
 builder.Services.AddScoped<ExportService>();
 builder.Services.AddScoped<AdminService>();
 builder.Services.AddScoped<BackupService>();
