@@ -4,6 +4,9 @@ Blazor Interactive Server + MudBlazor web UI for [CamusDB](https://github.com/ca
 
 <img width="939" height="705" alt="webconsole" src="https://github.com/user-attachments/assets/fc36a236-1328-4ddd-a724-1e4f70756094" />
 
+<img width="1450" height="816" alt="webconsole-opt" src="https://github.com/user-attachments/assets/ebfb38b9-fe55-4efd-b103-0e4d8ddb663f" />
+
+
 ## Requirements
 
 - A running CamusDB instance (REST default port `5095`, gRPC `5096`)
