@@ -6,7 +6,7 @@
 @inject IOptions<ConsoleLaunchOptions> LaunchOptions
 
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="@_theme">
 
 <head>
     <meta charset="utf-8" />
@@ -22,7 +22,7 @@
 </head>
 
 <body>
-    <Routes @rendermode="InteractiveServer" BrandName="@_brandName" LaunchHandoff="@_launchHandoff" ClientKey="@_clientKey" />
+    <Routes @rendermode="InteractiveServer" BrandName="@_brandName" LaunchHandoff="@_launchHandoff" ClientKey="@_clientKey" Theme="@_theme" />
     <ReconnectModal />
     <script src="_content/BlazorMonaco/jsInterop.js"></script>
     <script src="_content/BlazorMonaco/lib/monaco-editor/min/vs/loader.js"></script>
@@ -32,6 +32,7 @@
     <script src="@Assets["_content/MudBlazor/MudBlazor.min.js"]"></script>
     <script src="js/download.js"></script>
     <script src="js/storage.js"></script>
+    <script src="js/theme.js"></script>
 </body>
 
 </html>
@@ -70,12 +71,19 @@
     /// </summary>
     private string? _clientKey;
 
+    /// <summary>
+    /// "dark" or "light" from the theme cookie, normalized so the raw value never reaches the page.
+    /// Written onto &lt;html&gt; here because this component is static: the circuit cannot set it.
+    /// </summary>
+    private string _theme = ConsoleTheme.Dark;
+
     protected override void OnInitialized()
     {
         if (HttpContext is null)
             return;
 
         _clientKey = ClientAddress.Key(HttpContext);
+        _theme = ConsoleTheme.Normalize(HttpContext.Request.Cookies[ConsoleTheme.CookieName]);
 
         if (!LaunchOptions.Value.Enabled)
             return;

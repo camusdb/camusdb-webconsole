@@ -4,9 +4,11 @@
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
 @inject NavigationManager Navigation
+@inject ConsoleTheme ConsoleTheme
+@inject IJSRuntime JS
 @implements IDisposable
 
-<MudThemeProvider Theme="_theme" IsDarkMode="true" />
+<MudThemeProvider Theme="_theme" IsDarkMode="ConsoleTheme.IsDark" />
 <MudPopoverProvider />
 <MudDialogProvider />
 <MudSnackbarProvider />
@@ -55,6 +57,13 @@
                 </MudButton>
             </MudTooltip>
         }
+        <MudTooltip Text="@(ConsoleTheme.IsDark ? "Switch to the light theme" : "Switch to the dark theme")">
+            <MudIconButton Icon="@(ConsoleTheme.IsDark ? Icons.Material.Filled.LightMode : Icons.Material.Filled.DarkMode)"
+                           Size="Size.Small"
+                           Class="theme-btn"
+                           aria-label="Toggle theme"
+                           OnClick="ToggleThemeAsync" />
+        </MudTooltip>
         <MudButton Variant="Variant.Filled"
                    Size="Size.Small"
                    Class="configure-btn"
@@ -90,6 +99,25 @@
             Error = "#ef5350",
             Divider = "#3a3f45",
             LinesDefault = "#3a3f45",
+        },
+        // Same values as the light tokens in console.css.
+        PaletteLight = new PaletteLight
+        {
+            Black = "#1f2328",
+            Background = "#f4f5f7",
+            Surface = "#ffffff",
+            DrawerBackground = "#ffffff",
+            AppbarBackground = "#ffffff",
+            AppbarText = "#1f2328",
+            TextPrimary = "#1f2328",
+            TextSecondary = "#5f6670",
+            Primary = "#18803f",
+            Secondary = "#c2166f",
+            Info = "#1764c4",
+            Success = "#18803f",
+            Error = "#c62828",
+            Divider = "#d4d8dd",
+            LinesDefault = "#d4d8dd",
         },
         Typography = new Typography
         {
@@ -129,6 +157,23 @@
         await Session.SignOutAsync();
         Snackbar.Add("Signed out.", Severity.Normal);
         await OpenConfigureAsync();
+    }
+
+    /// <summary>
+    /// Flips the MudBlazor palette here, and the CSS tokens, the editor and the cookie in theme.js.
+    /// </summary>
+    private async Task ToggleThemeAsync()
+    {
+        ConsoleTheme.Apply(ConsoleTheme.IsDark ? ConsoleTheme.Light : ConsoleTheme.Dark);
+
+        try
+        {
+            await JS.InvokeVoidAsync("camusTheme.set", ConsoleTheme.Name);
+        }
+        catch (JSException)
+        {
+            // The palette still flips; only the page tokens and the saved choice are missed.
+        }
     }
 
     public void Dispose() => Session.Changed -= OnSessionChanged;

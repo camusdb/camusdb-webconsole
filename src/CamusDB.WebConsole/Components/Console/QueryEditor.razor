@@ -1,4 +1,5 @@
 @inject IJSRuntime JS
+@inject ConsoleTheme ConsoleTheme
 
 <div class="query-editor-host" style="height: 100%;">
     <StandaloneCodeEditor @ref="_editor"
@@ -52,8 +53,8 @@
             AutomaticLayout = true,
             // CamusDB-specific SQL mode registered by wwwroot/js/camus-sql.js.
             Language = "camussql",
-            // vs-dark plus the console's string/quoted-identifier colors; defined in camus-sql.js.
-            Theme = "camus-dark",
+            // vs-dark or vs plus the console's string/quoted-identifier colors; defined in camus-sql.js.
+            Theme = ConsoleTheme.EditorTheme,
             Value = Value ?? "",
             Minimap = new EditorMinimapOptions { Enabled = false },
             FontFamily = "IBM Plex Mono, Menlo, Consolas, monospace",

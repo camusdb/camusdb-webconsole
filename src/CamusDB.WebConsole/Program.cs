@@ -58,6 +58,7 @@ builder.Services.AddSingleton<ConsoleLaunchStore>();
 // that lived with the circuit would be reset by opening a new circuit, which is one page load.
 builder.Services.AddSingleton<LoginAttemptThrottle>();
 builder.Services.AddScoped<ConsoleBranding>();
+builder.Services.AddScoped<ConsoleTheme>();
 builder.Services.AddSingleton(sp => EndpointAllowList.Parse(
     sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<ConsoleLaunchOptions>>().Value.AllowedEndpoints));
 

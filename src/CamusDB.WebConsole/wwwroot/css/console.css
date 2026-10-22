@@ -1,4 +1,8 @@
+/* Dark is the default. App.razor writes data-theme="light" on <html> from the camus-theme cookie, and
+   js/theme.js changes it when the visitor toggles the theme. MainLayout holds the matching MudBlazor
+   palettes and camus-sql.js the matching editor themes. */
 :root {
+    color-scheme: dark;
     --camus-bg: #1a1c1e;
     --camus-surface: #212427;
     --camus-surface-2: #2a2d31;
@@ -7,12 +11,54 @@
     --camus-muted: #9aa0a6;
     --camus-green: #2ecc71;
     --camus-green-dim: #1e9e55;
+    --camus-on-green: #0b1a10;
     --camus-pink: #e91e8c;
     --camus-timestamp: #5cdb95;
     --camus-accent: #4ea1ff;
     --camus-danger: #ef5350;
+    --camus-warn: #ffb74d;
+    /* Hover tints are this color at a low alpha: white lightens a dark surface, black darkens a light one. */
+    --camus-overlay-rgb: 255, 255, 255;
+    --camus-header-hover: #30353b;
+    --camus-shadow: rgba(0, 0, 0, 0.45);
+    --camus-plan-edge: #5f6670;
+    --camus-kind-join: #b388ff;
+    --camus-kind-filter: #ffb74d;
+    --camus-kind-aggregate: #4dd0e1;
+    --camus-kind-sort: #f48fb1;
+    --camus-kind-limit: #aed581;
+    --camus-kind-exchange: #ff8a65;
     --camus-font: "IBM Plex Sans", "Segoe UI", sans-serif;
     --camus-mono: "IBM Plex Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+}
+
+/* The accents are darker than in the dark theme so that text in them keeps its contrast on white. */
+:root[data-theme="light"] {
+    color-scheme: light;
+    --camus-bg: #f4f5f7;
+    --camus-surface: #ffffff;
+    --camus-surface-2: #eceef1;
+    --camus-border: #d4d8dd;
+    --camus-text: #1f2328;
+    --camus-muted: #5f6670;
+    --camus-green: #18803f;
+    --camus-green-dim: #12662f;
+    --camus-on-green: #ffffff;
+    --camus-pink: #c2166f;
+    --camus-timestamp: #137a43;
+    --camus-accent: #1764c4;
+    --camus-danger: #c62828;
+    --camus-warn: #a15c00;
+    --camus-overlay-rgb: 0, 0, 0;
+    --camus-header-hover: #e2e5e9;
+    --camus-shadow: rgba(15, 20, 25, 0.16);
+    --camus-plan-edge: #a3aab3;
+    --camus-kind-join: #6a3fd1;
+    --camus-kind-filter: #b26200;
+    --camus-kind-aggregate: #00838f;
+    --camus-kind-sort: #c2185b;
+    --camus-kind-limit: #4f7f1f;
+    --camus-kind-exchange: #d84315;
 }
 
 html, body {
@@ -145,7 +191,7 @@ html, body {
 
 .schema-node.active,
 .schema-db.active {
-    background: rgba(46, 204, 113, 0.14);
+    background: color-mix(in srgb, var(--camus-green) 14%, transparent);
     color: var(--camus-text);
     box-shadow: inset 3px 0 0 var(--camus-green);
 }
@@ -181,7 +227,7 @@ html, body {
     font-weight: 600;
     letter-spacing: 0.04em;
     text-transform: uppercase;
-    color: #0b1a10;
+    color: var(--camus-on-green);
     background: var(--camus-green);
     flex-shrink: 0;
 }
@@ -202,7 +248,7 @@ html, body {
 }
 
 .schema-expand-btn:hover {
-    background: rgba(255, 255, 255, 0.08);
+    background: rgba(var(--camus-overlay-rgb), 0.08);
 }
 
 .schema-node .mud-icon-root {
@@ -261,7 +307,7 @@ html, body {
 
 .query-tab:hover {
     color: var(--camus-text);
-    background: rgba(255, 255, 255, 0.04);
+    background: rgba(var(--camus-overlay-rgb), 0.04);
 }
 
 .query-tab.active {
@@ -327,7 +373,7 @@ html, body {
 .query-tab-add:hover {
     color: var(--camus-green);
     border-color: var(--camus-green);
-    background: rgba(46, 204, 113, 0.08);
+    background: color-mix(in srgb, var(--camus-green) 8%, transparent);
 }
 
 .query-split {
@@ -439,7 +485,7 @@ html, body {
     margin-left: auto;
     padding: 1px 8px;
     border-radius: 4px;
-    background: rgba(78, 161, 255, 0.15);
+    background: color-mix(in srgb, var(--camus-accent) 15%, transparent);
     color: var(--camus-accent);
     font-family: var(--camus-mono);
     font-size: 0.75rem;
@@ -480,7 +526,7 @@ html, body {
 }
 
 .results-view-toggle button.active {
-    background: rgba(46, 204, 113, 0.12);
+    background: color-mix(in srgb, var(--camus-green) 12%, transparent);
     color: var(--camus-green);
 }
 
@@ -578,7 +624,7 @@ html, body {
 
 .results-fetch-more:hover:not(:disabled) {
     border-color: var(--camus-green);
-    background: rgba(46, 204, 113, 0.08);
+    background: color-mix(in srgb, var(--camus-green) 8%, transparent);
 }
 
 .results-fetch-more:disabled {
@@ -695,11 +741,11 @@ html, body {
 }
 
 .history-item:hover {
-    background: rgba(255, 255, 255, 0.03);
+    background: rgba(var(--camus-overlay-rgb), 0.03);
 }
 
 .history-item.selected {
-    background: rgba(78, 161, 255, 0.12);
+    background: color-mix(in srgb, var(--camus-accent) 12%, transparent);
     box-shadow: inset 3px 0 0 var(--camus-accent);
 }
 
@@ -715,7 +761,7 @@ html, body {
 .history-db {
     padding: 0 6px;
     border-radius: 4px;
-    background: rgba(78, 161, 255, 0.15);
+    background: color-mix(in srgb, var(--camus-accent) 15%, transparent);
     color: var(--camus-accent);
 }
 
@@ -746,7 +792,7 @@ html, body {
    join's second input sits beside its node in the second. */
 .plan-flow-wrap {
     padding: 14px 24px 32px;
-    --plan-edge: #5f6670;
+    --plan-edge: var(--camus-plan-edge);
 }
 
 .plan-summary {
@@ -796,13 +842,13 @@ html, body {
 }
 
 .plan-step.kind-source { --plan-kind: var(--camus-accent); }
-.plan-step.kind-join { --plan-kind: #b388ff; }
-.plan-step.kind-filter { --plan-kind: #ffb74d; }
-.plan-step.kind-aggregate { --plan-kind: #4dd0e1; }
-.plan-step.kind-sort { --plan-kind: #f48fb1; }
-.plan-step.kind-limit { --plan-kind: #aed581; }
+.plan-step.kind-join { --plan-kind: var(--camus-kind-join); }
+.plan-step.kind-filter { --plan-kind: var(--camus-kind-filter); }
+.plan-step.kind-aggregate { --plan-kind: var(--camus-kind-aggregate); }
+.plan-step.kind-sort { --plan-kind: var(--camus-kind-sort); }
+.plan-step.kind-limit { --plan-kind: var(--camus-kind-limit); }
 .plan-step.kind-project { --plan-kind: var(--camus-green); }
-.plan-step.kind-exchange { --plan-kind: #ff8a65; }
+.plan-step.kind-exchange { --plan-kind: var(--camus-kind-exchange); }
 
 .plan-edge {
     grid-column: 1;
@@ -851,9 +897,9 @@ html, body {
 }
 
 .plan-node.hot {
-    border-top-color: rgba(239, 83, 80, 0.55);
-    border-right-color: rgba(239, 83, 80, 0.55);
-    border-bottom-color: rgba(239, 83, 80, 0.55);
+    border-top-color: color-mix(in srgb, var(--camus-danger) 55%, transparent);
+    border-right-color: color-mix(in srgb, var(--camus-danger) 55%, transparent);
+    border-bottom-color: color-mix(in srgb, var(--camus-danger) 55%, transparent);
 }
 
 .plan-node-head {
@@ -893,13 +939,13 @@ html, body {
 }
 
 .plan-badge.hot {
-    background: rgba(239, 83, 80, 0.15);
+    background: color-mix(in srgb, var(--camus-danger) 15%, transparent);
     color: var(--camus-danger);
 }
 
 .plan-badge.warn {
-    background: rgba(255, 183, 77, 0.15);
-    color: #ffb74d;
+    background: color-mix(in srgb, var(--camus-warn) 15%, transparent);
+    color: var(--camus-warn);
 }
 
 .plan-desc {
@@ -1072,7 +1118,7 @@ html, body {
 }
 
 .results-table th.sortable:hover {
-    background: #30353b;
+    background: var(--camus-header-hover);
 }
 
 .results-table th .col-sort {
@@ -1089,7 +1135,7 @@ html, body {
 }
 
 .results-table tr:hover td {
-    background: rgba(255, 255, 255, 0.03);
+    background: rgba(var(--camus-overlay-rgb), 0.03);
 }
 
 .results-actions-col {
@@ -1126,7 +1172,7 @@ html, body {
     background: var(--camus-surface-2);
     border: 1px solid var(--camus-border);
     border-radius: 6px;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+    box-shadow: 0 8px 24px var(--camus-shadow);
 }
 
 .results-row-menu button {
@@ -1142,7 +1188,7 @@ html, body {
 }
 
 .results-row-menu button:hover:not(:disabled) {
-    background: rgba(255, 255, 255, 0.06);
+    background: rgba(var(--camus-overlay-rgb), 0.06);
 }
 
 .results-row-menu button:disabled {
@@ -1216,7 +1262,7 @@ html, body {
     font-weight: 600;
     padding: 1px 5px;
     border-radius: 3px;
-    background: rgba(78, 161, 255, 0.18);
+    background: color-mix(in srgb, var(--camus-accent) 18%, transparent);
     color: var(--camus-accent);
 }
 
@@ -1333,7 +1379,7 @@ html, body {
 
 .run-btn {
     background: var(--camus-green) !important;
-    color: #0b1a10 !important;
+    color: var(--camus-on-green) !important;
     font-weight: 600 !important;
 }
 
@@ -1364,6 +1410,11 @@ html, body {
 .admin-btn {
     border-color: var(--camus-border) !important;
     color: var(--camus-text) !important;
+    margin-right: 8px;
+}
+
+.theme-btn {
+    color: var(--camus-muted) !important;
     margin-right: 8px;
 }
 

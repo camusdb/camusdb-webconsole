@@ -25,6 +25,11 @@
  * for any of them. Each arrives as a plain identifier and the parse action checks it, so each stays
  * usable as a table or column name. Do not promote one to a keyword here.
  *
+ * Such a word is colored only inside the phrase where the grammar checks it: SHOW SLOW QUERIES,
+ * SET CLUSTER SETTING, CREATE OR REPLACE, FLUSH SESSIONS and the rest of the `phrases` state. Each
+ * phrase starts at a reserved word or has a shape no other statement takes, so a column named
+ * `queries` or `cascade` stays a plain name everywhere else.
+ *
  * The sequence statements follow the same rule. SEQUENCE and SEQUENCES are the only new tokens.
  * INCREMENT, MINVALUE, MAXVALUE, NO, CYCLE, CACHE, RESTART, OWNED, IDENTITY, GENERATED, ALWAYS,
  * SERIAL and CONTINUE are plain identifiers that the parse action checks.
@@ -146,6 +151,7 @@
                 // whose name is a keyword — "end@~pk" — is not split at the keyword either.
                 [/[A-Za-z_]\w*@~?[A-Za-z_]\w*/, 'identifier'],
 
+                { include: '@phrases' },
                 { include: '@scopes' },
 
                 // Query parameters: @name, as bound by CamusCommand.Parameters.
@@ -233,6 +239,67 @@
                 [/`/, { token: 'identifier.escaped', next: '@pop' }],
             ],
 
+            // Statement words the lexer leaves as plain identifiers and a parse action checks by text
+            // (see the header comment). Each rule colors the whole phrase, so the word is colored
+            // only where the grammar gives it a meaning. Monarch tokenizes one line at a time, so a
+            // phrase split across lines stays uncolored.
+            phrases: [
+                // SHOW ENGINE STATS, SHOW SLOW QUERIES, SHOW USERS, SHOW RANGES FROM ... and the
+                // others in show_stmt. No user name ever follows SHOW directly, so these are safe.
+                [/SHOW\s+(?:ENGINE\s+STATS|CLUSTER\s+(?:SETTINGS|QUERIES|CONNECTIONS)|SLOW\s+QUERIES|STATISTICS|VARIABLES|USERS|QUERIES|CONNECTIONS|EXTENSIONS|RANGES|RANGE)\b/i, 'keyword'],
+                // SHOW RANGE FROM TABLE t FOR ROW (1). The '(' keeps SHOW GRANTS FOR row plain.
+                [/FOR\s+ROW(?=\s*\()/i, 'keyword'],
+
+                [/(?:SET|RESET)\s+CLUSTER\s+SETTING\b/i, 'keyword'],
+                [/SET\s+TRANSACTION\s+(?:ISOLATION\s+LEVEL(?:\s+(?:SERIALIZABLE(?:\s+READ\s+(?:ONLY|WRITE))?|READ\s+COMMITTED))?|LOCKING(?:\s+(?:PESSIMISTIC|OPTIMISTIC))?|PRIORITY(?:\s+(?:BACKGROUND|LOW|NORMAL|HIGH|CRITICAL))?)\b/i, 'keyword'],
+
+                [/FLUSH\s+(?:PRIVILEGES|SESSIONS)\b/i, 'keyword'],
+                [/CANCEL\s+QUERY\b/i, 'keyword'],
+                // CALL proc(...): the procedure name and its '(' are what make it a statement.
+                [/CALL(?=\s+[A-Za-z_]\w*\s*\()/i, 'keyword'],
+                [/EVICT\s+CACHE(?:\s+ALL)?\b/i, 'keyword'],
+                [/(?:GRANT|REVOKE)\s+ALL(?:\s+PRIVILEGES)?\b/i, 'keyword'],
+
+                // CREATE TRIGGER t ON tbl BEFORE INSERT, UPDATE EXTERNAL NAME 'Ns.Type'
+                [/(?:CREATE|DROP)\s+TRIGGER\b/i, 'keyword'],
+                [/(?:BEFORE|AFTER)(?=\s+(?:INSERT|UPDATE|DELETE)\b)/i, 'keyword'],
+                [/EXTERNAL\s+NAME\b/i, 'keyword'],
+
+                // Views and materialized views.
+                [/CREATE\s+OR\s+REPLACE\b/i, 'keyword'],
+                [/WITH\s+(?:(?:LOCAL|CASCADED)\s+)?CHECK\s+OPTION\b/i, 'keyword'],
+                [/WITH\s+(?:NO\s+)?DATA\b/i, 'keyword'],
+                [/REFRESH\s+MATERIALIZED\s+VIEW\s+CONCURRENTLY\b/i, 'keyword'],
+                // OWNER and CASCADE/RESTRICT follow a view name, so the rule takes the name too. A
+                // backticked name does not match, and the words then stay uncolored.
+                [/(ALTER\s+VIEW)(\s+)([A-Za-z_][\w.]*)(\s+)(OWNER\s+TO)\b/i,
+                    ['keyword', 'white', 'identifier', 'white', 'keyword']],
+                [/(DROP\s+(?:MATERIALIZED\s+)?VIEW(?:\s+IF\s+EXISTS)?)(\s+)([A-Za-z_][\w.]*(?:\s*,\s*[A-Za-z_][\w.]*)*)(\s+)(CASCADE|RESTRICT)\b/i,
+                    ['keyword', 'white', 'identifier', 'white', 'keyword']],
+
+                // TRUNCATE t RESTART IDENTITY, INSERT ... OVERRIDING SYSTEM VALUE.
+                [/(?:RESTART|CONTINUE)\s+IDENTITY\b/i, 'keyword'],
+                [/OVERRIDING\s+(?:SYSTEM|USER)\s+VALUE\b/i, 'keyword'],
+
+                // Column definitions and ALTER TABLE storage forms.
+                [/GENERATED\s+(?:ALWAYS|BY\s+DEFAULT)\s+AS\s+IDENTITY\b/i, 'keyword'],
+                [/STORAGE\s+(?:EXTENDED|PLAIN|MAIN|EXTERNAL)\b/i, 'keyword'],
+                [/REWRITE\s+STORAGE(?:\s+INLINE)?\b/i, 'keyword'],
+                // `id serial`: the shorthand takes the place of a type, after a column name. The name
+                // must not be a word the tokenizer colors, so `SELECT serial, x` stays plain.
+                [/(?!@coloredWord)([A-Za-z_]\w*)(\s+)(SERIAL|BIGSERIAL)\b/i, ['identifier', 'white', 'type']],
+
+                // Foreign key clauses. NO ACTION is a lexer token; see '@scopes'.
+                [/ON\s+(?:DELETE|UPDATE)\s+(?:CASCADE|RESTRICT)\b/i, 'keyword'],
+                [/MATCH\s+(?:SIMPLE|FULL|PARTIAL)\b/i, 'keyword'],
+                [/INITIALLY\s+(?:DEFERRED|IMMEDIATE)\b/i, 'keyword'],
+
+                // Sequence options. Each valued option is colored only when its number follows.
+                [/(?:INCREMENT(?:\s+BY)?|MINVALUE|MAXVALUE|CACHE)(?=\s+-?\d)/i, 'keyword'],
+                [/RESTART(?:\s+WITH)?(?=\s+-?\d)/i, 'keyword'],
+                [/NO\s+(?:MINVALUE|MAXVALUE|CYCLE)\b/i, 'keyword'],
+            ],
+
             scopes: [
                 // Multi-word forms the lexer matches as a single token.
                 [/AS\s+OF\s+SYSTEM\s+TIME\b/i, 'keyword'],
@@ -252,6 +319,11 @@
             ],
         },
     };
+
+    // Any word the tokenizer colors as a keyword, operator or type. Monarch expands `@coloredWord` in a
+    // rule's regex to this source, so the SERIAL rule in `phrases` reads the same lists as the cases.
+    definition.coloredWord = new RegExp(
+        `(?:${[...definition.keywords, ...definition.operators, ...definition.builtinTypes].join('|')})\\b`);
 
     const configuration = {
         comments: {
@@ -275,26 +347,41 @@
         ],
     };
 
-    const THEME_ID = 'camus-dark';
-
     /*
-     * vs-dark plus the console's own token colors. Rules are matched by longest dot-prefix, and the
-     * tokens carry a `.sql` postfix, so these must name `<token>.sql` to beat monaco's built-in
-     * `string.sql` (a hard red) rather than losing to it.
+     * vs-dark and vs plus the console's own token colors. Rules are matched by longest dot-prefix,
+     * and the tokens carry a `.sql` postfix, so these must name `<token>.sql` to beat monaco's
+     * built-in `string.sql` (a hard red) rather than losing to it.
      */
-    const theme = {
-        base: 'vs-dark',
-        inherit: true,
-        rules: [
-            // Both quote styles — CamusDB parses "..." and '...' alike.
-            { token: 'string.sql', foreground: 'C792EA' },
-            { token: 'string.escape.sql', foreground: 'E5B9F0' },
+    const themes = {
+        'camus-dark': {
+            base: 'vs-dark',
+            inherit: true,
+            rules: [
+                // Both quote styles — CamusDB parses "..." and '...' alike.
+                { token: 'string.sql', foreground: 'C792EA' },
+                { token: 'string.escape.sql', foreground: 'E5B9F0' },
 
-            // Backtick-quoted identifiers: `games`
-            { token: 'identifier.escaped.sql', foreground: 'FA8072' },
-        ],
-        colors: {},
+                // Backtick-quoted identifiers: `games`
+                { token: 'identifier.escaped.sql', foreground: 'FA8072' },
+            ],
+            colors: {},
+        },
+        'camus-light': {
+            base: 'vs',
+            inherit: true,
+            rules: [
+                { token: 'string.sql', foreground: '8E3DAF' },
+                { token: 'string.escape.sql', foreground: 'B565D0' },
+                { token: 'identifier.escaped.sql', foreground: 'C0392B' },
+            ],
+            colors: {},
+        },
     };
+
+    /** The editor theme for the page theme, which App.razor and theme.js keep on <html>. */
+    function themeId() {
+        return document.documentElement.getAttribute('data-theme') === 'light' ? 'camus-light' : 'camus-dark';
+    }
 
     /*
      * Schema-aware completion. QueryWorkspace hands over a DotNetObjectReference to
@@ -467,7 +554,8 @@
             return true;
         }
 
-        window.monaco.editor.defineTheme(THEME_ID, theme);
+        for (const [id, theme] of Object.entries(themes))
+            window.monaco.editor.defineTheme(id, theme);
 
         languages.register({ id: LANGUAGE_ID, extensions: ['.sql'], aliases: ['CamusSQL', 'camussql'] });
         languages.setMonarchTokensProvider(LANGUAGE_ID, definition);
@@ -519,9 +607,15 @@
 
         // The theme is global in monaco, and it is only defined once this script has run — assert it
         // here for the same reason the language is re-tagged.
-        window.monaco.editor.setTheme(THEME_ID);
+        window.monaco.editor.setTheme(themeId());
 
         return true;
+    }
+
+    /** Called by theme.js after the page theme changes. The theme is global, so one call covers every editor. */
+    function syncTheme() {
+        if (register())
+            window.monaco.editor.setTheme(themeId());
     }
 
     // The AMD loader is the supported way to wait for monaco; the poll only covers a page that
@@ -543,5 +637,6 @@
         ensureRegistered: register,
         applyToEditor: applyToEditor,
         setCompletionSource: setCompletionSource,
+        syncTheme: syncTheme,
     };
 })();

@@ -2,6 +2,7 @@
 @inject ConsoleBranding Branding
 @inject ConsoleLaunchStore LaunchStore
 @inject CamusSessionService Session
+@inject ConsoleTheme ConsoleTheme
 
 <Router AppAssembly="typeof(Program).Assembly" NotFoundPage="typeof(Pages.NotFound)">
     <Found Context="routeData">
@@ -23,11 +24,16 @@
     [Parameter]
     public string? ClientKey { get; set; }
 
+    /// <summary>"dark" or "light", resolved by the static render from the theme cookie.</summary>
+    [Parameter]
+    public string? Theme { get; set; }
+
     protected override void OnInitialized()
     {
         // Applied in both renders. The circuit is the one that counts sign-in attempts, and it has no
         // other way to learn the address.
         Session.SetClientKey(ClientKey);
+        ConsoleTheme.Apply(Theme);
 
         // Both renders need the name: the static pass and the circuit have separate DI scopes, so
         // each gets its own ConsoleBranding and neither can see the other's.
