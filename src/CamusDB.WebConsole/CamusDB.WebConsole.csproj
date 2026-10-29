@@ -11,10 +11,41 @@
     <BlazorDisableThrowNavigationException>true</BlazorDisableThrowNavigationException>
   </PropertyGroup>
 
+  <!-- The .NET tool: dotnet tool install -g CamusDB.WebConsole, then camusdb-webconsole. -->
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <PackAsTool>true</PackAsTool>
+    <PackageId>CamusDB.WebConsole</PackageId>
+    <ToolCommandName>camusdb-webconsole</ToolCommandName>
+    <!-- A machine with only a newer runtime than net10.0 can still run the tool. -->
+    <RollForward>Major</RollForward>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/camusdb/camusdb-webconsole</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/camusdb/camusdb-webconsole</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>camusdb;database;sql;console;admin;blazor;dotnet-tool</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="PACKAGE.md" Pack="true" PackagePath="README.md" />
+    <!-- The tool reads the copy in its tools/ folder, which comes from the publish output. -->
+    <Content Update="appsettings*.json" Pack="false" />
+  </ItemGroup>
+
+  <!-- The Razor SDK also packs the static web assets as a library, with props files for a project that
+       references the package. The tool serves its published copy under tools/, so that copy is not used. -->
+  <Target Name="ExcludeLibraryStaticWebAssetsFromToolPackage" AfterTargets="IncludeStaticWebAssetsPackItems">
+    <ItemGroup>
+      <Content Remove="@(_StaticWebAssetsFilesToPack)" />
+    </ItemGroup>
+  </Target>
+
   <ItemGroup>
     <PackageReference Include="BlazorMonaco" Version="3.5.0" />
     <PackageReference Include="CamusDB.Client" Version="0.16.9" />
     <PackageReference Include="CsvHelper" Version="34.0.0" />
-    <PackageReference Include="MudBlazor" Version="9.*" />
+    <!-- Pinned: every release of the tool and the image must be the same build of its dependencies. -->
+    <PackageReference Include="MudBlazor" Version="9.11.0" />
   </ItemGroup>
 </Project>

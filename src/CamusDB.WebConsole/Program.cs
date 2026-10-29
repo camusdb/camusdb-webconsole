@@ -1,14 +1,58 @@
 using System.Globalization;
 using System.Threading.RateLimiting;
 using CamusDB.WebConsole.Endpoints;
+using CamusDB.WebConsole.Hosting;
 using CamusDB.WebConsole.Options;
 using CamusDB.WebConsole.Services;
+using Microsoft.AspNetCore.Hosting.Server;
+using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.RateLimiting;
 using MudBlazor;
 using MudBlazor.Services;
 using CamusDB.WebConsole.Components;
 
-var builder = WebApplication.CreateBuilder(args);
+ConsoleCommandLine commandLine = ConsoleCommandLine.Parse(args);
+
+if (commandLine.Error is not null)
+{
+    Console.Error.WriteLine(commandLine.Error);
+    Console.Error.WriteLine("Run camusdb-webconsole --help for the options.");
+    return 2;
+}
+
+if (commandLine.ShowHelp)
+{
+    Console.WriteLine(ConsoleCommandLine.HelpText);
+    return 0;
+}
+
+if (commandLine.ShowVersion)
+{
+    Console.WriteLine(ConsoleCommandLine.Version);
+    return 0;
+}
+
+var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+{
+    Args = commandLine.HostArgs,
+    ContentRootPath = ConsoleCommandLine.ContentRoot(commandLine.HostArgs),
+});
+
+// Added last, so the console's own options win over appsettings.json and the environment.
+builder.Configuration.AddInMemoryCollection(commandLine.Settings);
+
+// The console chooses its address only when nothing else did: the Docker image sets ASPNETCORE_URLS
+// and `dotnet run` takes the launch profile's. The address is the loopback one, so the tool's default
+// never serves a database console to the network. --port always applies.
+bool chooseAddress = commandLine.Port is not null
+    || (string.IsNullOrEmpty(builder.Configuration["urls"])
+        && string.IsNullOrEmpty(builder.Configuration["http_ports"])
+        && string.IsNullOrEmpty(builder.Configuration["https_ports"])
+        && !builder.Configuration.GetSection("Kestrel:Endpoints").Exists());
+
+int port = commandLine.Port ?? ConsoleCommandLine.DefaultPort;
+if (chooseAddress)
+    builder.WebHost.UseUrls($"http://127.0.0.1:{port}");
 
 builder.Services.Configure<CamusDbOptions>(builder.Configuration.GetSection(CamusDbOptions.SectionName));
 builder.Services.Configure<ConsoleSecurityOptions>(
@@ -114,7 +158,7 @@ builder.Services.AddRazorComponents()
 var app = builder.Build();
 
 ValidateCamusDbOptions(app);
-ValidateConsoleLaunchOptions(app);
+ValidateConsoleLaunchOptions(app, loopbackOnly: chooseAddress);
 
 if (!app.Environment.IsDevelopment())
 {
@@ -144,7 +188,31 @@ app.MapConsoleLaunch();
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
 
-app.Run();
+try
+{
+    await app.StartAsync();
+}
+catch (IOException ex) when (chooseAddress)
+{
+    Console.Error.WriteLine($"Could not listen on 127.0.0.1:{port}: {ex.Message}");
+    Console.Error.WriteLine("Use --port <number> for another port, or --port 0 for any free port.");
+    return 1;
+}
+
+if (chooseAddress)
+{
+    // With --port 0, only the server knows the port it took.
+    string url = app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()?.Addresses.FirstOrDefault()
+        ?? $"http://127.0.0.1:{port}";
+
+    Console.WriteLine($"CamusDB Web Console {ConsoleCommandLine.Version} is running at {url}. Press Ctrl+C to stop.");
+
+    if (!commandLine.NoBrowser)
+        BrowserLauncher.TryOpen(url, app.Logger);
+}
+
+await app.WaitForShutdownAsync();
+return 0;
 
 /// <summary>
 /// Fails startup when the console is told to accept tokens only while a user or a password is also
@@ -183,7 +251,11 @@ static void ValidateCamusDbOptions(WebApplication app)
 /// <para>It also resolves the endpoint allowlist, which is not only a launch concern: the same list
 /// governs the Configure dialog. That part runs whether or not the launch surface is enabled.</para>
 /// </summary>
-static void ValidateConsoleLaunchOptions(WebApplication app)
+/// <param name="loopbackOnly">
+/// True when the console chose its own address, which is a loopback one. Only the local user can then
+/// reach it, so the warning about an open endpoint list does not apply.
+/// </param>
+static void ValidateConsoleLaunchOptions(WebApplication app, bool loopbackOnly)
 {
     ConsoleLaunchOptions options = app.Services
         .GetRequiredService<Microsoft.Extensions.Options.IOptions<ConsoleLaunchOptions>>().Value;
@@ -205,7 +277,7 @@ static void ValidateConsoleLaunchOptions(WebApplication app)
             "Endpoint allowlist in force for launch payloads and the Configure dialog ({Count} entries): {AllowList}",
             allowList.Count, allowList.ToString());
     }
-    else if (!camus.LockEndpoint)
+    else if (!camus.LockEndpoint && !loopbackOnly)
     {
         // Not gated on the launch surface. The Configure dialog is the wider of the two paths and it
         // is open on every console, so the warning belongs on every console that leaves both guards

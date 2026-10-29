@@ -12,6 +12,42 @@ Blazor Interactive Server + MudBlazor web UI for [CamusDB](https://github.com/ca
 - A running CamusDB instance (REST default port `5095`, gRPC `5096`)
 - Either [Docker](https://docs.docker.com/get-docker/) **or** the [.NET 10 SDK](https://dotnet.microsoft.com/download)
 
+## Install as a .NET tool
+
+For one user on one machine, install the console from NuGet and run it:
+
+```bash
+dotnet tool install -g CamusDB.WebConsole
+camusdb-webconsole
+```
+
+The console starts on [http://127.0.0.1:5164](http://127.0.0.1:5164) and opens in the browser. It
+listens on `127.0.0.1` only. To serve the console to other machines, use the Docker image below.
+
+| Option | Description |
+| --- | --- |
+| `--endpoint <url>` | CamusDB server (default `http://localhost:5095`) |
+| `--database <name>` | Database to open first |
+| `--protocol <name>` | `rest` (default) or `grpc` |
+| `--user <name>` | User to sign in as; give the password in **Configure** |
+| `--port <number>` | Local port (default `5164`); `0` picks a free port |
+| `--no-browser` | Do not open the browser |
+| `--version`, `--help` | Show the version or the help |
+
+The environment variables of the Docker image work the same way. There is no password option, because
+a command line is visible in the process list: use `CamusDB__Password` or **Configure**. The ASP.NET
+Core host options pass through, so `--urls` sets the address yourself; the console then does not open
+the browser.
+
+The tool needs the .NET 10 runtime or later. Update it with `dotnet tool update -g CamusDB.WebConsole`.
+
+To pack the tool, and to push it to nuget.org:
+
+```bash
+tool/publish.sh                                # pack into nupkg/ only
+PUSH=1 NUGET_API_KEY=... tool/publish.sh       # pack and push
+```
+
 ## Run with Docker
 
 No .NET install required. Pull and run the published image:
