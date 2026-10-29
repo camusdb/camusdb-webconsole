@@ -43,6 +43,7 @@ builder.Services.AddMudServices(config =>
 builder.Services.AddScoped<CamusSessionService>();
 builder.Services.AddScoped<ConsolePreferencesService>();
 builder.Services.AddScoped<SchemaExplorerService>();
+builder.Services.AddScoped<SchemaChangeNotifier>();
 builder.Services.AddScoped<QueryExecutionService>();
 builder.Services.AddScoped<QueryHistoryService>();
 builder.Services.AddScoped<SchemaCompletionSource>();

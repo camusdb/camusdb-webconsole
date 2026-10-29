@@ -1,0 +1,439 @@
+@using System.Globalization
+@inject AdminService Admin
+@implements IAsyncDisposable
+
+<div class="admin-panel">
+    <div class="admin-controls">
+        <MudTextField T="string"
+                      Value="_filter"
+                      ValueChanged="OnFilterChanged"
+                      Label="Filter"
+                      Placeholder="orders"
+                      Variant="Variant.Outlined"
+                      Margin="Margin.Dense"
+                      Immediate="true"
+                      Clearable="true"
+                      Class="admin-pattern-field"
+                      HelperText="Text in the statement, case-insensitive." />
+
+        <MudSelect T="string"
+                   Value="_database"
+                   ValueChanged="OnDatabaseChanged"
+                   Label="Database"
+                   Variant="Variant.Outlined"
+                   Margin="Margin.Dense"
+                   Class="admin-select-field">
+            <MudSelectItem Value="@AllDatabases">All databases</MudSelectItem>
+            @foreach (string name in _databases)
+            {
+                <MudSelectItem Value="@name">@name</MudSelectItem>
+            }
+        </MudSelect>
+
+        <MudSelect T="StatementSort"
+                   Value="_sort"
+                   ValueChanged="OnSortChanged"
+                   Label="Sort by"
+                   Variant="Variant.Outlined"
+                   Margin="Margin.Dense"
+                   Class="admin-select-field">
+            @foreach (StatementSort sort in Enum.GetValues<StatementSort>())
+            {
+                <MudSelectItem Value="@sort">@SortLabel(sort)</MudSelectItem>
+            }
+        </MudSelect>
+
+        <MudButton Variant="Variant.Filled"
+                   Color="Color.Primary"
+                   Size="Size.Small"
+                   StartIcon="@Icons.Material.Filled.Refresh"
+                   Disabled="_busy"
+                   OnClick="() => RefreshAsync()">
+            @(_busy ? "Reading…" : "Take reading")
+        </MudButton>
+
+        <MudSwitch T="bool"
+                   Value="_autoRefresh"
+                   ValueChanged="OnAutoRefreshChanged"
+                   Color="Color.Primary"
+                   Label="@($"Auto every {AutoRefreshSeconds}s")" />
+
+        <MudSwitch T="bool"
+                   Value="_onlyMoved"
+                   ValueChanged="OnOnlyMovedChanged"
+                   Color="Color.Primary"
+                   Label="Only statements that ran" />
+
+        <MudTooltip Text="Forget the previous reading, so the figures describe each statement's whole life again.">
+            <MudButton Variant="Variant.Outlined"
+                       Size="Size.Small"
+                       Disabled="_previous is null"
+                       OnClick="ResetBaseline">
+                Reset baseline
+            </MudButton>
+        </MudTooltip>
+    </div>
+
+    @if (_error is not null)
+    {
+        <MudAlert Severity="Severity.Error" Dense="true" Class="admin-alert">@_error</MudAlert>
+    }
+
+    @if (_notice is not null)
+    {
+        <MudAlert Severity="Severity.Info" Dense="true" Class="admin-alert">@_notice</MudAlert>
+    }
+
+    <div class="results-toolbar">
+        @if (_current is null)
+        {
+            <span>No reading yet.</span>
+        }
+        else
+        {
+            <span>@_rows.Count.ToString("N0") statement@(_rows.Count == 1 ? "" : "s")</span>
+            @if (_rows.Count != _current.Rows.Count)
+            {
+                <span>of @_current.Rows.Count.ToString("N0")</span>
+            }
+            <span>
+                @if (_previous is null)
+                {
+                    <text>figures cover each statement's whole life — take a second reading for a window</text>
+                }
+                else
+                {
+                    <text>figures cover the last @FormatSeconds(_window)</text>
+                }
+            </span>
+            <span class="results-table-badge">@NodeLabel</span>
+        }
+    </div>
+
+    <div class="results-grid-wrap">
+        @if (_current is null)
+        {
+            <div class="empty-state">Take a reading to see the statements this node ran.</div>
+        }
+        else if (_current.Rows.Count == 0)
+        {
+            <div class="empty-state">
+                No statements recorded. Statement statistics are off by default. Turn them on with
+                <code>SET CLUSTER SETTING statement_stats_enabled = true</code>, or with
+                <code>statement_stats_enabled: true</code> in the node's config.yml. Only SELECT, INSERT,
+                UPDATE and DELETE are recorded.
+            </div>
+        }
+        else if (_rows.Count == 0)
+        {
+            <div class="empty-state">No statement matches the filters.</div>
+        }
+        else
+        {
+            <table class="results-table">
+                <thead>
+                    <tr>
+                        <th>statement<span class="col-type">database · kind</span></th>
+                        <th>calls<span class="col-type">@SpanLabel</span></th>
+                        <th>per sec</th>
+                        <th>total ms<span class="col-type">@SpanLabel</span></th>
+                        <th>mean ms</th>
+                        <th>stddev ms</th>
+                        <th>cv</th>
+                        <th>max ms<span class="col-type">lifetime</span></th>
+                        <th>errors</th>
+                        <th>read / call</th>
+                        <th>returned / call</th>
+                        <th>full scans</th>
+                        <th>spills</th>
+                        <th>retries</th>
+                        <th>plan changes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <Virtualize Items="_rows" Context="row" ItemSize="34">
+                        <tr>
+                            <td>
+                                <span class="stmt-sql" title="@row.Current.SampleSql">@row.Current.SampleSql</span>
+                                <span class="col-type">@row.Current.Database · @row.Current.Kind</span>
+                            </td>
+                            <td class="cell-number">@FormatCount(row.Calls)</td>
+                            <td class="@(row.CallsPerSecond is null ? "cell-null" : "cell-number")">@FormatRate(row.CallsPerSecond)</td>
+                            <td class="cell-number">@FormatNumber(row.TotalMs)</td>
+                            <td class="cell-number">@FormatNumber(row.MeanMs)</td>
+                            <td class="cell-number">@FormatNumber(row.StddevMs)</td>
+                            <td class="cell-number">@FormatNumber(row.Cv)</td>
+                            <td class="@(row.MaxGrew ? "cell-number cell-max-grew" : "cell-number")">@FormatNumber(row.Current.MaxMs)</td>
+                            <td class="@WarnClass(row.Errors)">@FormatCount(row.Errors)</td>
+                            <td class="cell-number">@FormatNumber(row.RowsReadPerCall)</td>
+                            <td class="cell-number">@FormatNumber(row.RowsReturnedPerCall)</td>
+                            <td class="@WarnClass(row.FullScans)">@FormatCount(row.FullScans)</td>
+                            <td class="@WarnClass(row.Spills)">@FormatCount(row.Spills)</td>
+                            <td class="@WarnClass(row.Retries)">@FormatCount(row.Retries)</td>
+                            <td class="@WarnClass(row.PlanChanges)">@FormatCount(row.PlanChanges)</td>
+                        </tr>
+                    </Virtualize>
+                </tbody>
+            </table>
+        }
+    </div>
+
+    <div class="admin-note">
+        Totals are kept per node from the first run of each statement shape, and they reset when the
+        node restarts. A shape groups the statements that differ only in their literals; the text shown
+        is the first one seen. A high <code>cv</code> marks a statement that is fast on some runs and slow
+        on others. When the server holds <code>statement_stats_max_shapes</code> shapes, it records no new
+        ones: see <code>statement_stats.dropped</code> in Engine stats.
+    </div>
+</div>
+
+@code {
+    private const int AutoRefreshSeconds = 10;
+    private const string AllDatabases = "";
+
+    private enum StatementSort
+    {
+        TotalTime,
+        MeanTime,
+        Calls,
+        Variation,
+        Errors,
+        RowsRead,
+    }
+
+    private string _filter = "";
+    private string _database = AllDatabases;
+    private StatementSort _sort = StatementSort.TotalTime;
+    private bool _busy;
+    private bool _onlyMoved;
+    private bool _autoRefresh;
+    private string? _error;
+    private string? _notice;
+
+    private StatementStatsSnapshot? _current;
+    private StatementStatsSnapshot? _previous;
+    private TimeSpan _window;
+    private List<string> _databases = [];
+    private List<StatementStatDelta> _rows = [];
+
+    private PeriodicTimer? _timer;
+    private CancellationTokenSource? _autoCts;
+
+    private string NodeLabel =>
+        _current?.Rows.Select(r => r.Node).FirstOrDefault(n => n.Length > 0) ?? "this node";
+
+    private string SpanLabel => _previous is null ? "lifetime" : "window";
+
+    protected override async Task OnInitializedAsync() => await RefreshAsync();
+
+    /// <summary>
+    /// Takes a reading and keeps the one before it. The totals are cumulative, so the figures for a
+    /// window are the differences between two readings.
+    /// </summary>
+    private async Task RefreshAsync()
+    {
+        if (_busy)
+            return;
+
+        _busy = true;
+        _error = null;
+        _notice = null;
+
+        try
+        {
+            StatementStatsSnapshot snapshot = await Admin.LoadStatementStatsAsync();
+
+            _previous = _current;
+            _current = snapshot;
+
+            // A total that went down means the node restarted and its totals started again from zero,
+            // so the previous reading cannot be subtracted.
+            if (_previous is not null && WentBackwards(_previous, snapshot))
+            {
+                _previous = null;
+                _notice = "The totals went down since the previous reading, so the node restarted. The baseline was reset.";
+            }
+
+            _window = _previous is null ? TimeSpan.Zero : snapshot.TakenAtUtc - _previous.TakenAtUtc;
+            _databases = snapshot.Rows.Select(r => r.Database).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
+
+            BuildRows();
+        }
+        catch (Exception ex)
+        {
+            _error = Describe(ex);
+        }
+        finally
+        {
+            _busy = false;
+            StateHasChanged();
+        }
+    }
+
+    private static bool WentBackwards(StatementStatsSnapshot previous, StatementStatsSnapshot current)
+    {
+        Dictionary<string, StatementStatRow> before = previous.Rows.GroupBy(r => r.Key).ToDictionary(g => g.Key, g => g.First());
+        return current.Rows.Any(r => before.TryGetValue(r.Key, out StatementStatRow? old) && r.Calls < old.Calls);
+    }
+
+    private void BuildRows()
+    {
+        if (_current is null)
+        {
+            _rows = [];
+            return;
+        }
+
+        Dictionary<string, StatementStatRow> baseline = _previous is null
+            ? []
+            : _previous.Rows.GroupBy(r => r.Key).ToDictionary(g => g.Key, g => g.First());
+
+        IEnumerable<StatementStatDelta> deltas = _current.Rows.Select(row => new StatementStatDelta
+        {
+            Current = row,
+            Previous = baseline.GetValueOrDefault(row.Key),
+            HasBaseline = _previous is not null,
+            Elapsed = _window,
+        });
+
+        if (_database != AllDatabases)
+            deltas = deltas.Where(d => string.Equals(d.Current.Database, _database, StringComparison.Ordinal));
+
+        if (!string.IsNullOrWhiteSpace(_filter))
+        {
+            string filter = _filter.Trim();
+            deltas = deltas.Where(d => d.Current.SampleSql.Contains(filter, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (_onlyMoved)
+            deltas = deltas.Where(d => d.Moved);
+
+        _rows = Sort(deltas).ToList();
+    }
+
+    private IEnumerable<StatementStatDelta> Sort(IEnumerable<StatementStatDelta> rows) => _sort switch
+    {
+        StatementSort.MeanTime => rows.OrderByDescending(r => r.MeanMs ?? -1),
+        StatementSort.Calls => rows.OrderByDescending(r => r.Calls),
+        StatementSort.Variation => rows.OrderByDescending(r => r.Cv ?? -1),
+        StatementSort.Errors => rows.OrderByDescending(r => r.Errors).ThenByDescending(r => r.Retries),
+        StatementSort.RowsRead => rows.OrderByDescending(r => r.RowsRead),
+        _ => rows.OrderByDescending(r => r.TotalMs),
+    };
+
+    private static string SortLabel(StatementSort sort) => sort switch
+    {
+        StatementSort.TotalTime => "Total time",
+        StatementSort.MeanTime => "Mean time",
+        StatementSort.Calls => "Calls",
+        StatementSort.Variation => "Variation (cv)",
+        StatementSort.Errors => "Errors",
+        StatementSort.RowsRead => "Rows read",
+        _ => sort.ToString(),
+    };
+
+    private void OnFilterChanged(string? filter)
+    {
+        _filter = filter ?? "";
+        BuildRows();
+    }
+
+    private void OnDatabaseChanged(string database)
+    {
+        _database = database;
+        BuildRows();
+    }
+
+    private void OnSortChanged(StatementSort sort)
+    {
+        _sort = sort;
+        BuildRows();
+    }
+
+    private void OnOnlyMovedChanged(bool enabled)
+    {
+        _onlyMoved = enabled;
+        BuildRows();
+    }
+
+    private void ResetBaseline()
+    {
+        _previous = null;
+        _window = TimeSpan.Zero;
+        _notice = null;
+        BuildRows();
+    }
+
+    private async Task OnAutoRefreshChanged(bool enabled)
+    {
+        _autoRefresh = enabled;
+
+        await StopAutoRefreshAsync();
+
+        if (!enabled)
+            return;
+
+        _autoCts = new CancellationTokenSource();
+        _timer = new PeriodicTimer(TimeSpan.FromSeconds(AutoRefreshSeconds));
+        _ = RunAutoRefreshAsync(_timer, _autoCts.Token);
+    }
+
+    private async Task RunAutoRefreshAsync(PeriodicTimer timer, CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (await timer.WaitForNextTickAsync(cancellationToken))
+                await InvokeAsync(RefreshAsync);
+        }
+        catch (OperationCanceledException)
+        {
+            // Toggled off, or the circuit is going away.
+        }
+    }
+
+    private async Task StopAutoRefreshAsync()
+    {
+        if (_autoCts is not null)
+        {
+            await _autoCts.CancelAsync();
+            _autoCts.Dispose();
+            _autoCts = null;
+        }
+
+        _timer?.Dispose();
+        _timer = null;
+    }
+
+    public async ValueTask DisposeAsync() => await StopAutoRefreshAsync();
+
+    private static string Describe(Exception ex) =>
+        ex is CamusDB.Client.CamusException camus ? CamusSessionService.Describe(camus) : ex.Message;
+
+    private static string FormatSeconds(TimeSpan span) =>
+        span.TotalSeconds.ToString("N1", CultureInfo.InvariantCulture) + " s";
+
+    private static string FormatCount(long value) => value.ToString("N0", CultureInfo.InvariantCulture);
+
+    private static string FormatNumber(double? value)
+    {
+        if (value is not double v)
+            return "—";
+
+        return Math.Abs(v) >= 1000
+            ? v.ToString("N1", CultureInfo.InvariantCulture)
+            : v.ToString("0.###", CultureInfo.InvariantCulture);
+    }
+
+    private static string FormatRate(double? value)
+    {
+        if (value is not double v)
+            return "—";
+        if (v == 0)
+            return "0";
+
+        return v.ToString(Math.Abs(v) >= 100 ? "N0" : "0.##", CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>A count that should be zero: a failure, a full scan, a spill, a retry or a new plan.</summary>
+    private static string WarnClass(long value) => value > 0 ? "cell-number cell-delta" : "cell-number";
+}

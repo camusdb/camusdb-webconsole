@@ -7,7 +7,10 @@
  * (CamusDB.Core/SQLParser/SQLParser.Language.analyzer.lex) and scalar-function registry, so the
  * editor colors exactly what the engine parses — no more and no less.
  *
- * Deliberately absent: UNION and FULL [OUTER] JOIN. The lexer has no token for UNION or FULL.
+ * Deliberately absent: FULL [OUTER] JOIN. The lexer has no token for FULL.
+ *
+ * UNION, INTERSECT and EXCEPT are reserved words for the set operations. The ALL after one of them is
+ * a plain identifier, so it is colored only in that phrase (UNION ALL).
  *
  * LEFT, RIGHT, OUTER and CROSS are reserved words for LEFT [OUTER] JOIN, RIGHT [OUTER] JOIN and
  * CROSS JOIN. RETURNING is reserved too: it starts the RETURNING list of an INSERT. A column with
@@ -71,17 +74,18 @@
             'CHECK', 'COLUMN', 'COLUMNS', 'COMMENT', 'COMMIT', 'CONSTRAINT',
             'CREATE', 'CROSS', 'DATABASE', 'DATABASES', 'DEFAULT', 'DEFERRABLE',
             'DELETE', 'DESC', 'DESCRIBE', 'DISTINCT', 'DROP', 'ELSE',
-            'END', 'EVICT', 'EXPLAIN', 'FALSE', 'FOR', 'FORCE',
-            'FOREIGN', 'FROM', 'GRANT', 'GRANTS', 'GROUP', 'HAVING',
-            'IDENTIFIED', 'IF', 'INCLUDE', 'INDEX', 'INDEXES', 'INITIALLY',
-            'INNER', 'INSERT', 'INTO', 'JOIN', 'KEY', 'LEFT',
-            'LIMIT', 'MATERIALIZED', 'NULL', 'OFFSET', 'ON', 'ORDER',
-            'ORPHAN', 'OUTER', 'PRIMARY', 'PRIVILEGES', 'REFERENCES', 'REFRESH',
-            'RELINK', 'RENAME', 'RESET', 'RETURNING', 'REVOKE', 'RIGHT',
-            'ROLLBACK', 'SELECT', 'SEQUENCE', 'SEQUENCES', 'SET', 'SHOW',
-            'START', 'TABLE', 'TABLES', 'THEN', 'TO', 'TRANSACTION',
-            'TRUE', 'TRUNCATE', 'UNIQUE', 'UPDATE', 'USER', 'VALUES',
-            'VIEW', 'VIEWS', 'WHEN', 'WHERE', 'WITH', 'WITHOUT',
+            'END', 'EVICT', 'EXCEPT', 'EXPLAIN', 'FALSE', 'FOR',
+            'FORCE', 'FOREIGN', 'FROM', 'GRANT', 'GRANTS', 'GROUP',
+            'HAVING', 'IDENTIFIED', 'IF', 'INCLUDE', 'INDEX', 'INDEXES',
+            'INITIALLY', 'INNER', 'INSERT', 'INTERSECT', 'INTO', 'JOIN',
+            'KEY', 'LEFT', 'LIMIT', 'MATERIALIZED', 'NULL', 'OFFSET',
+            'ON', 'ORDER', 'ORPHAN', 'OUTER', 'PRIMARY', 'PRIVILEGES',
+            'REFERENCES', 'REFRESH', 'RELINK', 'RENAME', 'RESET', 'RETURNING',
+            'REVOKE', 'RIGHT', 'ROLLBACK', 'SELECT', 'SEQUENCE', 'SEQUENCES',
+            'SET', 'SHOW', 'START', 'TABLE', 'TABLES', 'THEN',
+            'TO', 'TRANSACTION', 'TRUE', 'TRUNCATE', 'UNION', 'UNIQUE',
+            'UPDATE', 'USER', 'VALUES', 'VIEW', 'VIEWS', 'WHEN',
+            'WHERE', 'WITH', 'WITHOUT',
         ],
 
         operators: [
@@ -108,24 +112,42 @@
         // SHA functions from HashScalarFunctions, and NEXTVAL, CURRVAL, LASTVAL and SETVAL from
         // SequenceScalarFunctions.
         //
-        // GROUP_CONCAT, STRING_AGG and ARRAY_AGG are absent on purpose. The engine names them only to
-        // reject them inside a CHECK constraint. No aggregator implements them.
+        // ScalarFunctionRegistry.CreateDefault() lists the other names: the bytes, hash, clock, date
+        // constructor and date pattern functions (HEX, DIGEST, CLOCK_TIMESTAMP, MAKE_DATE, TO_CHAR, ...)
+        // and the MySQL date-part shortcuts (YEAR, MONTH, DAYOFWEEK, ...). ALL, ANY and SOME are
+        // registered too, but they are colored as quantifiers. See the header comment.
+        //
+        // POSITION(needle IN haystack) is not registered. The grammar rewrites it to STRPOS. EXTRACT is
+        // registered, and the grammar also accepts its EXTRACT(field FROM x) form. GENERATE_SERIES is
+        // the one table function: it is called in FROM (TableFunctionRegistry).
+        //
+        // COUNT_DISTINCT, GROUP_CONCAT, STRING_AGG and ARRAY_AGG are absent on purpose. The engine names
+        // them only to reject them (AggregateFunctionCatalog.ReservedOnly). No aggregator implements them.
         builtinFunctions: [
-            'ABS', 'ARRAY_CONTAINS', 'ARRAY_LENGTH', 'AVG', 'CARDINALITY', 'CEIL',
-            'CEILING', 'COALESCE', 'CONCAT', 'CONTAINS', 'COSINE_DISTANCE', 'COUNT',
-            'COUNT_DISTINCT', 'CURRENT_DATABASE', 'CURRENT_DATE', 'CURRENT_ROLE', 'CURRENT_TIMESTAMP', 'CURRENT_USER',
-            'CURRVAL', 'DATE_ADD', 'DATE_DIFF', 'DATE_PART', 'DATE_TRUNC', 'ENDS_WITH',
-            'FLOOR', 'FROM_UNIXTIME', 'GEN_ID', 'GEN_UUID_V4', 'GEN_UUID_V7', 'IFNULL',
-            'INNER_PRODUCT', 'IS_SUPERUSER', 'JSON_ARRAY_LENGTH', 'JSON_CONTAINS', 'JSON_EXTRACT', 'JSON_TYPE',
-            'JSON_VALID', 'JSON_VALUE', 'L2_DISTANCE', 'LASTVAL', 'LENGTH', 'LOWER',
-            'LTRIM', 'MAX', 'MD5', 'MIN', 'MOD', 'NEXTVAL',
-            'NOW', 'NVL', 'OCTET_LENGTH', 'POW', 'POWER', 'RANDOM',
-            'REGEXP_COUNT', 'REGEXP_INSTR', 'REGEXP_LIKE', 'REGEXP_MATCH', 'REGEXP_MATCHES', 'REGEXP_REPLACE',
-            'REGEXP_SPLIT_TO_ARRAY', 'REGEXP_SPLIT_TO_TABLE', 'REGEXP_SUBSTR', 'REPLACE', 'ROUND', 'RTRIM',
-            'SETVAL', 'SHA1', 'SHA256', 'SHA512', 'SIGN', 'SQRT',
-            'STARTS_WITH', 'STR_ID', 'SUBSTRING', 'SUM', 'TO_BOOL', 'TO_BYTES',
+            'ABS', 'ARRAY_CONTAINS', 'ARRAY_LENGTH', 'AVG', 'BIT_COUNT', 'BIT_LENGTH',
+            'CARDINALITY', 'CEIL', 'CEILING', 'CLOCK_TIMESTAMP', 'COALESCE', 'CONCAT',
+            'CONTAINS', 'CONVERT_FROM', 'CONVERT_TO', 'COSINE_DISTANCE', 'COUNT', 'CRC32',
+            'CURRENT_DATABASE', 'CURRENT_DATE', 'CURRENT_ROLE', 'CURRENT_TIMESTAMP', 'CURRENT_USER', 'CURRVAL',
+            'DATE_ADD', 'DATE_DIFF', 'DATE_FORMAT', 'DATE_PART', 'DATE_TRUNC', 'DAY',
+            'DAYNAME', 'DAYOFMONTH', 'DAYOFWEEK', 'DAYOFYEAR', 'DECODE', 'DIGEST',
+            'ENCODE', 'ENDS_WITH', 'EXTRACT', 'FLOOR', 'FROM_BASE64', 'FROM_UNIXTIME',
+            'GENERATE_SERIES', 'GEN_ID', 'GEN_RANDOM_BYTES', 'GEN_UUID_V4', 'GEN_UUID_V7', 'GET_BIT',
+            'GET_BYTE', 'HEX', 'HMAC', 'HOUR', 'IFNULL', 'INNER_PRODUCT',
+            'IS_SUPERUSER', 'JSON_ARRAY_LENGTH', 'JSON_CONTAINS', 'JSON_EXTRACT', 'JSON_TYPE', 'JSON_VALID',
+            'JSON_VALUE', 'L2_DISTANCE', 'LASTVAL', 'LAST_DAY', 'LENGTH', 'LOWER',
+            'LTRIM', 'MAKEDATE', 'MAKE_DATE', 'MAKE_TIMESTAMP', 'MAX', 'MD5',
+            'MIN', 'MINUTE', 'MOD', 'MONTH', 'MONTHNAME', 'NEXTVAL',
+            'NOW', 'NULLIF', 'NVL', 'OCTET_LENGTH', 'POSITION', 'POW',
+            'POWER', 'QUARTER', 'RANDOM', 'REGEXP_COUNT', 'REGEXP_INSTR', 'REGEXP_LIKE',
+            'REGEXP_MATCH', 'REGEXP_MATCHES', 'REGEXP_REPLACE', 'REGEXP_SPLIT_TO_ARRAY', 'REGEXP_SPLIT_TO_TABLE', 'REGEXP_SUBSTR',
+            'REPLACE', 'ROUND', 'RTRIM', 'SECOND', 'SETVAL', 'SET_BIT',
+            'SET_BYTE', 'SHA1', 'SHA256', 'SHA512', 'SIGN', 'SQRT',
+            'STARTS_WITH', 'STATEMENT_TIMESTAMP', 'STRPOS', 'STR_ID', 'STR_TO_DATE', 'SUBSTRING',
+            'SUM', 'SYSDATE', 'TO_BASE64', 'TO_BOOL', 'TO_BYTES', 'TO_CHAR',
             'TO_DATE', 'TO_DATETIME', 'TO_FLOAT32', 'TO_FLOAT64', 'TO_ID', 'TO_INT64',
-            'TO_STRING', 'TRIM', 'TRUNC', 'UNIX_TIMESTAMP', 'UPPER', 'VECTOR_DIMS',
+            'TO_STRING', 'TO_TIMESTAMP', 'TRANSACTION_TIMESTAMP', 'TRIM', 'TRUNC', 'UNHEX',
+            'UNIX_TIMESTAMP', 'UNIX_TIMESTAMP_MS', 'UPPER', 'VECTOR_DIMS', 'WEEK', 'WEEKDAY',
+            'YEAR',
         ],
 
         // Quantifiers of a comparison: `x > ALL (SELECT ...)`. See the header comment.
@@ -178,8 +200,9 @@
                     },
                 }],
 
-                // Includes CamusDB's POSIX regex operators: ~  ~*  !~  !~*
-                [/[<>=!%&+\-*/|~^]/, 'operator'],
+                // Includes CamusDB's POSIX regex operators (~  ~*  !~  !~*), concatenation (||) and the
+                // bitwise operators (&  |  #  ~  <<  >>). '#' is XOR, never a comment. There is no '^'.
+                [/[<>=!%&+\-*/|~#]/, 'operator'],
             ],
 
             whitespace: [
@@ -246,7 +269,7 @@
             phrases: [
                 // SHOW ENGINE STATS, SHOW SLOW QUERIES, SHOW USERS, SHOW RANGES FROM ... and the
                 // others in show_stmt. No user name ever follows SHOW directly, so these are safe.
-                [/SHOW\s+(?:ENGINE\s+STATS|CLUSTER\s+(?:SETTINGS|QUERIES|CONNECTIONS)|SLOW\s+QUERIES|STATISTICS|VARIABLES|USERS|QUERIES|CONNECTIONS|EXTENSIONS|RANGES|RANGE)\b/i, 'keyword'],
+                [/SHOW\s+(?:ENGINE\s+STATS|STATEMENT\s+STATS|CLUSTER\s+(?:SETTINGS|QUERIES|CONNECTIONS)|SLOW\s+QUERIES|INDEX\s+USAGE|STATISTICS|VARIABLES|USERS|QUERIES|CONNECTIONS|EXTENSIONS|RANGES|RANGE)\b/i, 'keyword'],
                 // SHOW RANGE FROM TABLE t FOR ROW (1). The '(' keeps SHOW GRANTS FOR row plain.
                 [/FOR\s+ROW(?=\s*\()/i, 'keyword'],
 
@@ -259,6 +282,26 @@
                 [/CALL(?=\s+[A-Za-z_]\w*\s*\()/i, 'keyword'],
                 [/EVICT\s+CACHE(?:\s+ALL)?\b/i, 'keyword'],
                 [/(?:GRANT|REVOKE)\s+ALL(?:\s+PRIVILEGES)?\b/i, 'keyword'],
+
+                // CREATE EXTENSION [IF NOT EXISTS] e VERSION '1.0', ALTER EXTENSION e UPDATE TO '1.1'.
+                // The version is always a string literal, so the quote after VERSION is what pins it.
+                [/(?:CREATE|ALTER|DROP)\s+EXTENSION\b/i, 'keyword'],
+                [/VERSION(?=\s*['"])/i, 'keyword'],
+
+                // Set operations: SELECT ... UNION ALL SELECT ...
+                [/(?:UNION|INTERSECT|EXCEPT)\s+ALL\b/i, 'keyword'],
+
+                // SELECT ... FOR [NO KEY] UPDATE [OF t] [NOWAIT | SKIP LOCKED]. NOWAIT ends the
+                // statement, so it is colored only there. FOR SHARE parses only to be refused.
+                [/FOR\s+(?:NO\s+KEY\s+)?UPDATE(?:\s+OF)?\b/i, 'keyword'],
+                [/SKIP\s+LOCKED\b/i, 'keyword'],
+                [/NOWAIT(?=\s*(?:;|$))/i, 'keyword'],
+
+                // INSERT ... ON CONFLICT [(cols) | ON CONSTRAINT c] DO NOTHING | DO UPDATE SET ...,
+                // and UPSERT INTO t ...
+                [/ON\s+CONFLICT\b/i, 'keyword'],
+                [/DO\s+(?:NOTHING|UPDATE)\b/i, 'keyword'],
+                [/UPSERT(?=\s+INTO\b)/i, 'keyword'],
 
                 // CREATE TRIGGER t ON tbl BEFORE INSERT, UPDATE EXTERNAL NAME 'Ns.Type'
                 [/(?:CREATE|DROP)\s+TRIGGER\b/i, 'keyword'],

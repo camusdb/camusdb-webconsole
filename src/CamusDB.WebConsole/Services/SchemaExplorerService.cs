@@ -3,18 +3,12 @@ using CamusDB.WebConsole.Models;
 
 namespace CamusDB.WebConsole.Services;
 
-public sealed class SchemaExplorerService
+public sealed class SchemaExplorerService(CamusSessionService session)
 {
-    private readonly CamusSessionService _session;
-
-    public SchemaExplorerService(CamusSessionService session)
-    {
-        _session = session;
-    }
-
     public async Task<IReadOnlyList<string>> ListDatabasesAsync(CancellationToken cancellationToken = default)
     {
         List<object?[]> rows = await QueryAsync("SHOW DATABASES", cancellationToken).ConfigureAwait(false);
+        
         return rows
             .Select(r => GetString(r, 0))
             .Where(n => n.Length > 0)
@@ -26,6 +20,7 @@ public sealed class SchemaExplorerService
     public async Task<IReadOnlyList<string>> ListTablesAsync(CancellationToken cancellationToken = default)
     {
         List<object?[]> rows = await QueryAsync("SHOW TABLES", cancellationToken).ConfigureAwait(false);
+        
         return rows
             .Select(r => GetString(r, 0))
             .Where(n => n.Length > 0)
@@ -41,7 +36,7 @@ public sealed class SchemaExplorerService
         ArgumentException.ThrowIfNullOrWhiteSpace(table);
         string sql = $"SHOW COLUMNS FROM {SqlBuilder.QuoteIdent(table)}";
 
-        await using CamusCommand command = _session.GetConnection().CreateCamusCommand(sql);
+        await using CamusCommand command = session.GetConnection().CreateCamusCommand(sql);
         await using CamusDataReader reader =
             await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
 
@@ -80,9 +75,10 @@ public sealed class SchemaExplorerService
     /// Reads the table's DDL. SHOW CREATE TABLE yields one row of (Table, Create Table); the second
     /// value is the statement text.
     /// </summary>
-    public async Task<string?> ShowCreateTableAsync(
+    private async Task<string?> ShowCreateTableAsync(
         string table,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(table);
 
@@ -127,7 +123,7 @@ public sealed class SchemaExplorerService
         ArgumentException.ThrowIfNullOrWhiteSpace(table);
         string sql = $"SHOW INDEXES FROM {SqlBuilder.QuoteIdent(table)}";
 
-        await using CamusCommand command = _session.GetConnection().CreateCamusCommand(sql);
+        await using CamusCommand command = session.GetConnection().CreateCamusCommand(sql);
         await using CamusDataReader reader =
             await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
 
@@ -166,7 +162,7 @@ public sealed class SchemaExplorerService
     /// </summary>
     public async Task<IReadOnlyList<SequenceSchemaInfo>> ListSequencesAsync(CancellationToken cancellationToken = default)
     {
-        await using CamusCommand command = _session.GetConnection().CreateCamusCommand("SHOW SEQUENCES");
+        await using CamusCommand command = session.GetConnection().CreateCamusCommand("SHOW SEQUENCES");
         await using CamusDataReader reader =
             await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
 
@@ -204,7 +200,7 @@ public sealed class SchemaExplorerService
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(database);
-        return await _session.GetConnection().ShowBranchesAsync(database, cancellationToken).ConfigureAwait(false);
+        return await session.GetConnection().ShowBranchesAsync(database, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<CamusSchemaNode> BuildRootAsync(CancellationToken cancellationToken = default)
@@ -249,7 +245,7 @@ public sealed class SchemaExplorerService
         string database = databaseNode.Database;
 
         // Switch without notifying — callers own UI refresh. Avoids tearing down the tree mid-load.
-        await _session.ChangeDatabaseAsync(database, notify: false, cancellationToken).ConfigureAwait(false);
+        await session.ChangeDatabaseAsync(database, notify: false, cancellationToken).ConfigureAwait(false);
 
         IReadOnlyList<string> tables = await ListTablesAsync(cancellationToken).ConfigureAwait(false);
 
@@ -320,7 +316,7 @@ public sealed class SchemaExplorerService
         if (tableNode.ChildrenLoaded && !forceReload)
             return;
 
-        await _session.ChangeDatabaseAsync(tableNode.Database, notify: false, cancellationToken)
+        await session.ChangeDatabaseAsync(tableNode.Database, notify: false, cancellationToken)
             .ConfigureAwait(false);
 
         string table = tableNode.Table;
@@ -407,7 +403,7 @@ public sealed class SchemaExplorerService
 
     private async Task<List<object?[]>> QueryAsync(string sql, CancellationToken cancellationToken)
     {
-        await using CamusCommand command = _session.GetConnection().CreateCamusCommand(sql);
+        await using CamusCommand command = session.GetConnection().CreateCamusCommand(sql);
         await using CamusDataReader reader =
             await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
 

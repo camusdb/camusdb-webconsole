@@ -24,7 +24,10 @@ public sealed class CamusSessionService : IAsyncDisposable
     /// <summary>Authenticated, but lacking the privilege the statement needs on some table.</summary>
     public const string PrivilegeDeniedCode = "CADB0517";
 
-    /// <summary>Per-account login rate limit exceeded.</summary>
+    /// <summary>
+    /// Too many login attempts for the account, or the server is too busy to check a password. The
+    /// client retries the busy case three times, so the code reaches the console only when it lasts.
+    /// </summary>
     public const string LoginRateLimitedCode = "CADB0518";
 
     /// <summary>Credentials sent over plaintext where the server requires TLS.</summary>
@@ -493,7 +496,8 @@ public sealed class CamusSessionService : IAsyncDisposable
             $"Insufficient privilege: {ex.Message}. Every table a statement touches needs the privilege; "
             + "grant it with GRANT … ON database.table TO user.",
         LoginRateLimitedCode =>
-            "Too many login attempts for that account. Wait a minute and try again.",
+            "The server refused the login: too many attempts for that account, or too many logins at "
+            + "once. Wait a minute and try again.",
         // Two different refusals share this code: the driver's own check, raised before anything is
         // sent, and the server's. Pointing only at the server flag leaves the driver one unexplained.
         TlsRequiredCode =>

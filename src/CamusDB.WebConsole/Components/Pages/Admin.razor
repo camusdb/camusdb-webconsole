@@ -35,10 +35,11 @@
                 <MudText Typo="Typo.body2">
                     <b>@(string.IsNullOrEmpty(Session.User) ? "This session" : Session.User)</b> is not a
                     superuser, and every surface here requires one when the server has authentication
-                    enabled. Engine metrics describe Raft topology and whole-node workload, the variable
-                    list describes the node's whole security posture, and a backup covers every database
-                    on the node — none of it is scoped down by a per-database grant, so there is no
-                    privilege to ask for short of a superuser account.
+                    enabled. Engine metrics describe Raft topology and whole-node workload, statement
+                    statistics hold the SQL text of every user, index usage counts the whole node's
+                    workload, the variable list describes the node's whole security posture, and a
+                    backup covers every database on the node — none of it is scoped down by a
+                    per-database grant, so there is no privilege to ask for short of a superuser account.
                 </MudText>
             </MudAlert>
         </div>
@@ -65,6 +66,20 @@
         <div class="admin-pane @(_tab == AdminTab.Variables ? null : "admin-pane-hidden")">
             <VariablesPanel />
         </div>
+        @* Mounted lazily, like Backups: each one runs a statement when it opens. Once open, they stay
+           mounted, so switching tabs keeps their baselines. *@
+        @if (_statementsOpened)
+        {
+            <div class="admin-pane @(_tab == AdminTab.Statements ? null : "admin-pane-hidden")">
+                <StatementStatsPanel />
+            </div>
+        }
+        @if (_indexUsageOpened)
+        {
+            <div class="admin-pane @(_tab == AdminTab.IndexUsage ? null : "admin-pane-hidden")">
+                <IndexUsagePanel />
+            </div>
+        }
         @* Mounted lazily: listing the catalog is a real HTTP call, and it must not fire for someone
            who never opens the tab. *@
         @if (_backupsOpened)
@@ -80,13 +95,18 @@
     private enum AdminTab
     {
         EngineStats,
+        Statements,
+        IndexUsage,
         Variables,
         Backups,
     }
 
-    private static readonly AdminTab[] Tabs = [AdminTab.EngineStats, AdminTab.Variables, AdminTab.Backups];
+    private static readonly AdminTab[] Tabs =
+        [AdminTab.EngineStats, AdminTab.Statements, AdminTab.IndexUsage, AdminTab.Variables, AdminTab.Backups];
 
     private AdminTab _tab = AdminTab.EngineStats;
+    private bool _statementsOpened;
+    private bool _indexUsageOpened;
     private bool _backupsOpened;
 
     protected override void OnInitialized() => Session.Changed += OnSessionChanged;
@@ -97,13 +117,19 @@
     {
         _tab = tab;
 
-        if (tab == AdminTab.Backups)
+        if (tab == AdminTab.Statements)
+            _statementsOpened = true;
+        else if (tab == AdminTab.IndexUsage)
+            _indexUsageOpened = true;
+        else if (tab == AdminTab.Backups)
             _backupsOpened = true;
     }
 
     private static string Title(AdminTab tab) => tab switch
     {
         AdminTab.EngineStats => "Engine stats",
+        AdminTab.Statements => "Statements",
+        AdminTab.IndexUsage => "Index usage",
         AdminTab.Variables => "Variables",
         AdminTab.Backups => "Backups",
         _ => tab.ToString(),

@@ -5,14 +5,15 @@ using CamusDB.WebConsole.Models;
 namespace CamusDB.WebConsole.Services;
 
 /// <summary>
-/// Runs the node-local administration statements — <c>SHOW ENGINE STATS</c> and <c>SHOW VARIABLES</c> —
-/// and shapes their rows for the administration views.
+/// Runs the node-local administration statements — <c>SHOW ENGINE STATS</c>, <c>SHOW VARIABLES</c>,
+/// <c>SHOW STATEMENT STATS</c> and <c>SHOW INDEX USAGE</c> — and shapes their rows for the
+/// administration views.
 ///
-/// <para>Both answer for <em>the node that served them</em> and never forward to the leader, so these
+/// <para>All of them answer for <em>the node that served them</em> and never forward to the leader, so these
 /// views describe the node behind <see cref="CamusSessionService.Endpoint"/> and no other. Comparing a
 /// cluster means pointing the console at each node in turn.</para>
 ///
-/// <para>Both require a superuser when the server has authentication enabled — no per-database grant
+/// <para>All of them require a superuser when the server has authentication enabled — no per-database grant
 /// scopes down Raft topology or a node's whole security posture — and a non-superuser gets
 /// <see cref="CamusSessionService.PrivilegeDeniedCode"/>.</para>
 /// </summary>
@@ -20,6 +21,8 @@ public sealed class AdminService
 {
     private const string EngineStatsStatement = "SHOW ENGINE STATS";
     private const string VariablesStatement = "SHOW VARIABLES";
+    private const string StatementStatsStatement = "SHOW STATEMENT STATS";
+    private const string IndexUsageStatement = "SHOW INDEX USAGE";
 
     /// <summary>Shown next to the pattern box, and used as the rejection message.</summary>
     public const string PatternHelp =
@@ -91,6 +94,73 @@ public sealed class AdminService
     }
 
     /// <summary>
+    /// Reads every statement shape this node recorded, in every database. The panel filters the rows
+    /// itself: the server's LIKE matches the SQL text case-sensitively, and SQL text holds the quotes and
+    /// punctuation that <see cref="IsValidPattern"/> refuses.
+    /// </summary>
+    public async Task<StatementStatsSnapshot> LoadStatementStatsAsync(CancellationToken cancellationToken = default)
+    {
+        List<StatementStatRow> rows = [];
+
+        await ReadAsync(
+            StatementStatsStatement,
+            (reader, ordinals) => rows.Add(new StatementStatRow
+            {
+                Node = ReadString(reader, ordinals, "node") ?? "",
+                Database = ReadString(reader, ordinals, "database") ?? "",
+                ShapeId = ReadString(reader, ordinals, "shape_id") ?? "",
+                Kind = ReadString(reader, ordinals, "kind") ?? "",
+                SampleSql = ReadString(reader, ordinals, "sample_sql") ?? "",
+                Calls = ReadLong(reader, ordinals, "calls"),
+                Errors = ReadLong(reader, ordinals, "errors"),
+                TotalMs = ReadDouble(reader, ordinals, "total_ms") ?? 0,
+                SumSqMs = ReadDouble(reader, ordinals, "sum_sq_ms") ?? 0,
+                MinMs = ReadDouble(reader, ordinals, "min_ms") ?? 0,
+                MaxMs = ReadDouble(reader, ordinals, "max_ms") ?? 0,
+                RowsRead = ReadLong(reader, ordinals, "rows_read"),
+                RowsReturned = ReadLong(reader, ordinals, "rows_returned"),
+                FullScans = ReadLong(reader, ordinals, "full_scans"),
+                Spills = ReadLong(reader, ordinals, "spills"),
+                Retries = ReadLong(reader, ordinals, "retries"),
+                PlanChanges = ReadLong(reader, ordinals, "plan_changes"),
+                LastSeenAt = ReadString(reader, ordinals, "last_seen_at"),
+            }),
+            cancellationToken).ConfigureAwait(false);
+
+        return new StatementStatsSnapshot { TakenAtUtc = DateTime.UtcNow, Rows = rows };
+    }
+
+    /// <summary>
+    /// Reads the use of every readable index in the session's current database. The server answers
+    /// for the context database only, so the caller switches the session to the database it wants.
+    /// </summary>
+    public async Task<IndexUsageSnapshot> LoadIndexUsageAsync(CancellationToken cancellationToken = default)
+    {
+        string database = _session.Database;
+        List<IndexUsageRow> rows = [];
+
+        await ReadAsync(
+            IndexUsageStatement,
+            (reader, ordinals) => rows.Add(new IndexUsageRow
+            {
+                Node = ReadString(reader, ordinals, "node") ?? "",
+                Database = ReadString(reader, ordinals, "database") ?? database,
+                Table = ReadString(reader, ordinals, "table") ?? "",
+                Index = ReadString(reader, ordinals, "index") ?? "",
+                Unique = ReadValue(reader, ordinals, "unique") is true,
+                Reads = ReadLong(reader, ordinals, "reads"),
+                ConstraintReads = ReadLong(reader, ordinals, "constraint_reads"),
+                EntriesRead = ReadLong(reader, ordinals, "entries_read"),
+                Writes = ReadLong(reader, ordinals, "writes"),
+                LastReadAt = ReadString(reader, ordinals, "last_read_at"),
+                TrackedSince = ReadString(reader, ordinals, "tracked_since"),
+            }),
+            cancellationToken).ConfigureAwait(false);
+
+        return new IndexUsageSnapshot { TakenAtUtc = DateTime.UtcNow, Database = database, Rows = rows };
+    }
+
+    /// <summary>
     /// The pattern reaches the server inside a SQL string literal, and these statements have no
     /// parameter form, so the console constrains what may go in rather than escaping its way out.
     /// Variable and metric names are lowercase identifiers and tags are <c>k=v</c> pairs, so nothing
@@ -142,6 +212,17 @@ public sealed class AdminService
         ReadValue(reader, ordinals, name) is object value
             ? Convert.ToString(value, CultureInfo.InvariantCulture)
             : null;
+
+    private static long ReadLong(CamusDataReader reader, Dictionary<string, int> ordinals, string name) =>
+        ReadValue(reader, ordinals, name) switch
+        {
+            long l => l,
+            int i => i,
+            double d when double.IsFinite(d) => (long)d,
+            decimal m => (long)m,
+            string s when long.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out long parsed) => parsed,
+            _ => 0,
+        };
 
     private static double? ReadDouble(CamusDataReader reader, Dictionary<string, int> ordinals, string name)
     {

@@ -1505,6 +1505,21 @@ html, body {
     max-width: 320px;
 }
 
+.admin-select-field {
+    min-width: 180px;
+    max-width: 240px;
+}
+
+/* A statement's sample text: one line in the grid, the whole text in the tooltip. */
+.stmt-sql {
+    display: block;
+    max-width: 480px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--camus-mono);
+}
+
 .admin-alert {
     margin: 10px 14px 0;
 }

@@ -10,6 +10,19 @@ namespace CamusDB.WebConsole.Services;
 /// </summary>
 public sealed record SqlStatement(string Text, int Start, int End);
 
+/// <summary>What a statement that succeeded changes in the schema tree.</summary>
+public enum SchemaEffect
+{
+    /// <summary>Nothing the tree shows: queries, DML, users, grants, extensions.</summary>
+    None,
+
+    /// <summary>The objects of the database the statement ran in: tables, views, indexes, sequences, comments.</summary>
+    Objects,
+
+    /// <summary>The list of databases: CREATE, DROP, ALTER or RENAME DATABASE.</summary>
+    Databases,
+}
+
 /// <summary>
 /// Reads SQL text the way the CamusDB lexer does, without a parser: it splits a script into its
 /// statements and finds words outside strings, quoted names and comments.
@@ -119,6 +132,52 @@ public static class SqlScript
         return "";
     }
 
+    /// <summary>
+    /// What the statement changes in the schema tree when it succeeds. The second word separates a
+    /// database from the objects in one, and from the users and extensions, which the tree does not
+    /// show. TRUNCATE changes rows only.
+    /// </summary>
+    public static SchemaEffect SchemaEffectOf(string sql)
+    {
+        List<string> words = LeadingWords(sql, 2);
+        if (words.Count == 0)
+            return SchemaEffect.None;
+
+        string second = words.Count > 1 ? words[1] : "";
+
+        return words[0] switch
+        {
+            "CREATE" or "DROP" or "ALTER" or "RENAME" => second switch
+            {
+                "DATABASE" => SchemaEffect.Databases,
+                "USER" or "EXTENSION" => SchemaEffect.None,
+                _ => SchemaEffect.Objects,
+            },
+            "COMMENT" => SchemaEffect.Objects,
+            _ => SchemaEffect.None,
+        };
+    }
+
+    /// <summary>The first words of the statement, upper case, up to the first token that is not a word.</summary>
+    private static List<string> LeadingWords(string sql, int count)
+    {
+        List<string> words = [];
+        foreach (Token token in Tokenize(sql))
+        {
+            if (token.Kind is TokenKind.Whitespace or TokenKind.Comment)
+                continue;
+
+            if (token.Kind != TokenKind.Word)
+                break;
+
+            words.Add(sql[token.Start..token.End].ToUpperInvariant());
+            if (words.Count == count)
+                break;
+        }
+
+        return words;
+    }
+
     /// <summary>True when <paramref name="word"/> appears as a word anywhere in the statement.</summary>
     public static bool HasWord(string sql, string word) => FindWord(sql, word, topLevelOnly: false);
 
@@ -128,7 +187,12 @@ public static class SqlScript
     /// <summary>
     /// True when the console can page through the statement: a single <c>SELECT</c> with no
     /// <c>LIMIT</c> or <c>OFFSET</c> of its own. The grammar puts <c>LIMIT</c> and <c>OFFSET</c> last
-    /// in a <c>SELECT</c>, so the console can add them at the end.
+    /// in a <c>SELECT</c>, so the console can add them at the end. A set operation takes them at the
+    /// end too, for the whole result.
+    ///
+    /// <para>The one exception is the row-locking clause, <c>FOR UPDATE …</c>, which comes after
+    /// <c>LIMIT</c>. A top-level <c>FOR</c> in a <c>SELECT</c> can only start that clause, so such a
+    /// statement is not paged.</para>
     /// </summary>
     public static bool IsPageableSelect(string sql)
     {
@@ -138,7 +202,7 @@ public static class SqlScript
         if (Split(sql).Count != 1)
             return false;
 
-        return !HasTopLevelWord(sql, "LIMIT") && !HasTopLevelWord(sql, "OFFSET");
+        return !HasTopLevelWord(sql, "LIMIT") && !HasTopLevelWord(sql, "OFFSET") && !HasTopLevelWord(sql, "FOR");
     }
 
     /// <summary>

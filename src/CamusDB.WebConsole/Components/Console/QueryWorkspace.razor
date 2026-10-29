@@ -3,6 +3,7 @@
 @inject ConsolePreferencesService Prefs
 @inject QueryHistoryService History
 @inject SchemaCompletionSource Completion
+@inject SchemaChangeNotifier SchemaChanges
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
 @implements IDisposable
@@ -454,6 +455,10 @@
         tab.ClearResults();
         StateHasChanged();
 
+        // The schema tree loads again once, after the whole run, not after each statement of a script.
+        bool databaseListChanged = false;
+        HashSet<string> changedDatabases = new(StringComparer.OrdinalIgnoreCase);
+
         try
         {
             for (int i = 0; i < statements.Count; i++)
@@ -465,6 +470,7 @@
                 }
 
                 string sql = statements[i];
+                string database = Session.Database;
                 QueryResultModel result = await Queries.ExecutePagedAsync(sql, token);
 
                 tab.Results.Add(new StatementRun(sql, result));
@@ -472,8 +478,16 @@
 
                 await History.AddAsync(sql, Session.Database, result);
 
-                if (result.Success && ChangesSchema(sql))
+                SchemaEffect effect = result.Success ? SqlScript.SchemaEffectOf(sql) : SchemaEffect.None;
+                if (effect != SchemaEffect.None)
+                {
                     Completion.Invalidate();
+
+                    if (effect == SchemaEffect.Databases)
+                        databaseListChanged = true;
+                    else
+                        changedDatabases.Add(database);
+                }
 
                 if (!result.Success)
                 {
@@ -497,11 +511,10 @@
             _cts = null;
             StateHasChanged();
         }
-    }
 
-    /// <summary>A statement after which the cached table and column names can be out of date.</summary>
-    private static bool ChangesSchema(string sql) =>
-        SqlScript.FirstWord(sql) is "CREATE" or "ALTER" or "DROP" or "RENAME" or "TRUNCATE";
+        if (databaseListChanged || changedDatabases.Count > 0)
+            SchemaChanges.Notify(new SchemaChange { DatabaseList = databaseListChanged, Databases = changedDatabases });
+    }
 
     private Task RefreshActiveDataAsync() => RunCoreAsync(RunMode.Tab);
 

@@ -1,0 +1,404 @@
+@using System.Globalization
+@inject AdminService Admin
+@inject SchemaExplorerService Schema
+@inject CamusSessionService Session
+@implements IAsyncDisposable
+
+<div class="admin-panel">
+    <div class="admin-controls">
+        <MudSelect T="string"
+                   Value="_database"
+                   ValueChanged="OnDatabaseChangedAsync"
+                   Label="Database"
+                   Variant="Variant.Outlined"
+                   Margin="Margin.Dense"
+                   Disabled="_busy"
+                   HelperText="Choosing a database also makes it the console's current database."
+                   Class="admin-select-field">
+            @foreach (string name in _databases)
+            {
+                <MudSelectItem Value="@name">@name</MudSelectItem>
+            }
+        </MudSelect>
+
+        <MudTextField T="string"
+                      Value="_filter"
+                      ValueChanged="OnFilterChanged"
+                      Label="Filter"
+                      Placeholder="orders"
+                      Variant="Variant.Outlined"
+                      Margin="Margin.Dense"
+                      Immediate="true"
+                      Clearable="true"
+                      Class="admin-pattern-field"
+                      HelperText="Text in the table or index name, case-insensitive." />
+
+        <MudButton Variant="Variant.Filled"
+                   Color="Color.Primary"
+                   Size="Size.Small"
+                   StartIcon="@Icons.Material.Filled.Refresh"
+                   Disabled="_busy"
+                   OnClick="() => RefreshAsync()">
+            @(_busy ? "Reading…" : "Take reading")
+        </MudButton>
+
+        <MudSwitch T="bool"
+                   Value="_autoRefresh"
+                   ValueChanged="OnAutoRefreshChanged"
+                   Color="Color.Primary"
+                   Label="@($"Auto every {AutoRefreshSeconds}s")" />
+
+        <MudSwitch T="bool"
+                   Value="_onlyCandidates"
+                   ValueChanged="OnOnlyCandidatesChanged"
+                   Color="Color.Primary"
+                   Label="Only drop candidates" />
+
+        <MudSwitch T="bool"
+                   Value="_onlyMoved"
+                   ValueChanged="OnOnlyMovedChanged"
+                   Color="Color.Primary"
+                   Label="Only rows that moved" />
+
+        <MudTooltip Text="Forget the previous reading, so the next one has nothing to subtract from.">
+            <MudButton Variant="Variant.Outlined"
+                       Size="Size.Small"
+                       Disabled="_previous is null"
+                       OnClick="ResetBaseline">
+                Reset baseline
+            </MudButton>
+        </MudTooltip>
+    </div>
+
+    @if (_error is not null)
+    {
+        <MudAlert Severity="Severity.Error" Dense="true" Class="admin-alert">@_error</MudAlert>
+    }
+
+    <div class="results-toolbar">
+        @if (_current is null)
+        {
+            <span>No reading yet.</span>
+        }
+        else
+        {
+            <span>@_rows.Count.ToString("N0") index@(_rows.Count == 1 ? "" : "es")</span>
+            @if (_rows.Count != _current.Rows.Count)
+            {
+                <span>of @_current.Rows.Count.ToString("N0")</span>
+            }
+            <span>@_candidateCount.ToString("N0") drop candidate@(_candidateCount == 1 ? "" : "s")</span>
+            <span>
+                @if (_previous is null)
+                {
+                    <text>first reading — deltas appear on the next one</text>
+                }
+                else
+                {
+                    <text>Δ over @FormatSeconds(_window)</text>
+                }
+            </span>
+            <span class="results-table-badge">@_current.Database · @NodeLabel</span>
+        }
+    </div>
+
+    <div class="results-grid-wrap">
+        @if (_current is null)
+        {
+            <div class="empty-state">Take a reading to see how the indexes of a database are used.</div>
+        }
+        else if (_current.Rows.Count == 0)
+        {
+            <div class="empty-state">This database has no readable index.</div>
+        }
+        else if (_rows.Count == 0)
+        {
+            <div class="empty-state">No index matches the filters.</div>
+        }
+        else
+        {
+            <table class="results-table">
+                <thead>
+                    <tr>
+                        <th>table</th>
+                        <th>index</th>
+                        <th>reads</th>
+                        <th>Δ reads</th>
+                        <th>constraint reads</th>
+                        <th>Δ constraint</th>
+                        <th>entries read</th>
+                        <th>Δ entries</th>
+                        <th>writes</th>
+                        <th>Δ writes</th>
+                        <th>last read</th>
+                        <th>tracked since</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <Virtualize Items="_rows" Context="row" ItemSize="34">
+                        <tr>
+                            <td>@row.Current.Table</td>
+                            <td>
+                                @row.Current.Index
+                                @if (row.Current.Unique)
+                                {
+                                    <span class="col-type">unique</span>
+                                }
+                                @if (row.Current.IsDropCandidate)
+                                {
+                                    <span class="plan-badge warn" title="No read and no constraint read since tracked since, but it takes writes.">unused</span>
+                                }
+                            </td>
+                            <td class="cell-number">@FormatCount(row.Current.Reads)</td>
+                            <td class="@DeltaClass(row.ReadsDelta)">@FormatDelta(row.ReadsDelta)</td>
+                            <td class="cell-number">@FormatCount(row.Current.ConstraintReads)</td>
+                            <td class="@DeltaClass(row.ConstraintReadsDelta)">@FormatDelta(row.ConstraintReadsDelta)</td>
+                            <td class="cell-number">@FormatCount(row.Current.EntriesRead)</td>
+                            <td class="@DeltaClass(row.EntriesReadDelta)">@FormatDelta(row.EntriesReadDelta)</td>
+                            <td class="cell-number">@FormatCount(row.Current.Writes)</td>
+                            <td class="@DeltaClass(row.WritesDelta)">@FormatDelta(row.WritesDelta)</td>
+                            <td class="@(row.Current.LastReadAt is null ? "cell-null" : "cell-timestamp")">@(row.Current.LastReadAt ?? "never")</td>
+                            <td class="cell-timestamp">@(row.Current.TrackedSince ?? "—")</td>
+                        </tr>
+                    </Virtualize>
+                </tbody>
+            </table>
+        }
+    </div>
+
+    <div class="admin-note">
+        The counts are for this node only, from <code>tracked since</code>, and they reset when the node
+        restarts. A drop candidate has no read and no constraint read but takes writes. A unique index or
+        the primary key enforces a constraint, so it never is one. Check every node, and compare the window
+        with <code>tracked since</code>, before you drop an index.
+    </div>
+</div>
+
+@code {
+    private const int AutoRefreshSeconds = 10;
+
+    private string _database = "";
+    private string _filter = "";
+    private bool _busy;
+    private bool _onlyCandidates;
+    private bool _onlyMoved;
+    private bool _autoRefresh;
+    private string? _error;
+
+    private IReadOnlyList<string> _databases = [];
+    private IndexUsageSnapshot? _current;
+    private IndexUsageSnapshot? _previous;
+    private TimeSpan _window;
+    private List<IndexUsageDelta> _rows = [];
+    private int _candidateCount;
+
+    private PeriodicTimer? _timer;
+    private CancellationTokenSource? _autoCts;
+
+    private string NodeLabel =>
+        _current?.Rows.Select(r => r.Node).FirstOrDefault(n => n.Length > 0) ?? "this node";
+
+    protected override async Task OnInitializedAsync()
+    {
+        _database = Session.Database;
+
+        try
+        {
+            _databases = await Schema.ListDatabasesAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = Describe(ex);
+        }
+
+        await RefreshAsync();
+    }
+
+    private async Task OnDatabaseChangedAsync(string database)
+    {
+        if (_busy || string.Equals(database, _database, StringComparison.Ordinal))
+            return;
+
+        try
+        {
+            await Session.ChangeDatabaseAsync(database, notify: true);
+            _database = Session.Database;
+        }
+        catch (Exception ex)
+        {
+            _error = Describe(ex);
+            return;
+        }
+
+        await RefreshAsync();
+    }
+
+    /// <summary>
+    /// Takes a reading and keeps the one before it. The counts are cumulative since the node started
+    /// tracking each index, so the counts for a window are the differences between two readings.
+    /// </summary>
+    private async Task RefreshAsync()
+    {
+        if (_busy)
+            return;
+
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            IndexUsageSnapshot snapshot = await Admin.LoadIndexUsageAsync();
+
+            // A reading of another database has nothing in common with the one before it.
+            _previous = _current is not null && string.Equals(_current.Database, snapshot.Database, StringComparison.Ordinal)
+                ? _current
+                : null;
+            _current = snapshot;
+            _database = snapshot.Database;
+            _window = _previous is null ? TimeSpan.Zero : snapshot.TakenAtUtc - _previous.TakenAtUtc;
+
+            BuildRows();
+        }
+        catch (Exception ex)
+        {
+            _error = Describe(ex);
+        }
+        finally
+        {
+            _busy = false;
+            StateHasChanged();
+        }
+    }
+
+    private void BuildRows()
+    {
+        if (_current is null)
+        {
+            _rows = [];
+            _candidateCount = 0;
+            return;
+        }
+
+        Dictionary<string, IndexUsageRow> baseline = _previous is null
+            ? []
+            : _previous.Rows.GroupBy(r => r.Key).ToDictionary(g => g.Key, g => g.First());
+
+        IEnumerable<IndexUsageDelta> deltas = _current.Rows.Select(row => new IndexUsageDelta
+        {
+            Current = row,
+            // A new tracked_since means the node started this index's counts again, after a restart or
+            // after the index was dropped and created again, so the old counts cannot be subtracted.
+            Previous = baseline.TryGetValue(row.Key, out IndexUsageRow? old) && old.TrackedSince == row.TrackedSince
+                ? old
+                : null,
+        });
+
+        if (!string.IsNullOrWhiteSpace(_filter))
+        {
+            string filter = _filter.Trim();
+            deltas = deltas.Where(d =>
+                d.Current.Table.Contains(filter, StringComparison.OrdinalIgnoreCase)
+                || d.Current.Index.Contains(filter, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (_onlyCandidates)
+            deltas = deltas.Where(d => d.Current.IsDropCandidate);
+
+        if (_onlyMoved && _previous is not null)
+            deltas = deltas.Where(d => d.Moved);
+
+        _rows = deltas.ToList();
+        _candidateCount = _current.Rows.Count(r => r.IsDropCandidate);
+    }
+
+    private void OnFilterChanged(string? filter)
+    {
+        _filter = filter ?? "";
+        BuildRows();
+    }
+
+    private void OnOnlyCandidatesChanged(bool enabled)
+    {
+        _onlyCandidates = enabled;
+        BuildRows();
+    }
+
+    private void OnOnlyMovedChanged(bool enabled)
+    {
+        _onlyMoved = enabled;
+        BuildRows();
+    }
+
+    private void ResetBaseline()
+    {
+        _previous = null;
+        _window = TimeSpan.Zero;
+        BuildRows();
+    }
+
+    private async Task OnAutoRefreshChanged(bool enabled)
+    {
+        _autoRefresh = enabled;
+
+        await StopAutoRefreshAsync();
+
+        if (!enabled)
+            return;
+
+        _autoCts = new CancellationTokenSource();
+        _timer = new PeriodicTimer(TimeSpan.FromSeconds(AutoRefreshSeconds));
+        _ = RunAutoRefreshAsync(_timer, _autoCts.Token);
+    }
+
+    private async Task RunAutoRefreshAsync(PeriodicTimer timer, CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (await timer.WaitForNextTickAsync(cancellationToken))
+                await InvokeAsync(RefreshAsync);
+        }
+        catch (OperationCanceledException)
+        {
+            // Toggled off, or the circuit is going away.
+        }
+    }
+
+    private async Task StopAutoRefreshAsync()
+    {
+        if (_autoCts is not null)
+        {
+            await _autoCts.CancelAsync();
+            _autoCts.Dispose();
+            _autoCts = null;
+        }
+
+        _timer?.Dispose();
+        _timer = null;
+    }
+
+    public async ValueTask DisposeAsync() => await StopAutoRefreshAsync();
+
+    private static string Describe(Exception ex) =>
+        ex is CamusDB.Client.CamusException camus ? CamusSessionService.Describe(camus) : ex.Message;
+
+    private static string FormatSeconds(TimeSpan span) =>
+        span.TotalSeconds.ToString("N1", CultureInfo.InvariantCulture) + " s";
+
+    private static string FormatCount(long value) => value.ToString("N0", CultureInfo.InvariantCulture);
+
+    private static string FormatDelta(long? value) => value switch
+    {
+        null => "—",
+        0 => "0",
+        long v when v > 0 => "+" + FormatCount(v),
+        long v => "-" + FormatCount(-v),
+    };
+
+    private static string DeltaClass(long? value) =>
+        value switch
+        {
+            null => "cell-null",
+            0 => "cell-number",
+            _ => "cell-number cell-delta",
+        };
+}

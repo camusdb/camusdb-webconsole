@@ -5,6 +5,7 @@
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
 @inject SchemaCompletionSource Completion
+@inject SchemaChangeNotifier SchemaChanges
 @implements IDisposable
 
 <div class="schema-drawer-host">
@@ -366,6 +367,7 @@
     protected override void OnInitialized()
     {
         Session.Changed += OnSessionChanged;
+        SchemaChanges.Changed += OnSchemaChanged;
         _wasConnected = Session.IsConnected;
     }
 
@@ -1155,7 +1157,93 @@
         _ = Prefs.SetDrawerWidthAsync(_drawerWidth);
     }
 
-    public void Dispose() => Session.Changed -= OnSessionChanged;
+    private async void OnSchemaChanged(SchemaChange change) =>
+        await InvokeAsync(() => ApplySchemaChangeAsync(change));
+
+    /// <summary>
+    /// Loads again the parts of the tree that SQL from the query workspace changed. A database that
+    /// is collapsed is only marked for a reload on its next expand. The expanded databases and tables
+    /// stay expanded, and the session ends on the database it was on.
+    /// </summary>
+    private async Task ApplySchemaChangeAsync(SchemaChange change)
+    {
+        if (!Session.IsConnected || _loading)
+            return;
+
+        // Nothing loaded yet: the first full load shows the change already.
+        if (_databases.Count == 0)
+        {
+            await RefreshAsync();
+            return;
+        }
+
+        string current = Session.Database;
+
+        try
+        {
+            if (change.DatabaseList)
+                await ReloadDatabaseListAsync();
+
+            foreach (string name in change.Databases)
+            {
+                DbEntry? db = _databases.FirstOrDefault(d => string.Equals(d.Name, name, StringComparison.OrdinalIgnoreCase));
+                if (db is null || !db.Loaded)
+                    continue;
+
+                if (db.Expanded)
+                    await ReloadTablesKeepingStateAsync(db);
+                else
+                    db.Loaded = false;
+            }
+
+            if (!string.Equals(Session.Database, current, StringComparison.OrdinalIgnoreCase))
+                await Session.ChangeDatabaseAsync(current, notify: true);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Schema refresh failed: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            StateHasChanged();
+        }
+    }
+
+    /// <summary>Lists the databases again and keeps the entry, with its state, of each one that still exists.</summary>
+    private async Task ReloadDatabaseListAsync()
+    {
+        IReadOnlyList<string> names = await Schema.ListDatabasesAsync();
+        Dictionary<string, DbEntry> existing = _databases.ToDictionary(d => d.Name, StringComparer.OrdinalIgnoreCase);
+
+        List<DbEntry> next = names
+            .Select(n => existing.TryGetValue(n, out DbEntry? entry) ? entry : new DbEntry { Name = n })
+            .ToList();
+
+        _databases.Clear();
+        _databases.AddRange(next);
+    }
+
+    private async Task ReloadTablesKeepingStateAsync(DbEntry db)
+    {
+        HashSet<string> expanded = db.Tables
+            .Where(t => t.Expanded)
+            .Select(t => t.Name)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        await LoadTablesAsync(db, activate: false);
+
+        foreach (TableEntry table in db.Tables.Where(t => expanded.Contains(t.Name)))
+        {
+            table.Expanded = true;
+            await LoadTableDetailsAsync(db, table);
+        }
+    }
+
+    public void Dispose()
+    {
+        Session.Changed -= OnSessionChanged;
+        SchemaChanges.Changed -= OnSchemaChanged;
+    }
 
     private sealed class DbEntry
     {

@@ -23,6 +23,8 @@ public static class QueryPlanParser
 
     private const string GatherSpanRow = "gather-span";
 
+    private const string SetOperationOperand = "operand";
+
     // A detail is "key=value, key=value". A value can hold an expression with commas, so each pattern
     // anchors its key at the start of the detail or after ", " and stops the value at the next comma.
     private static readonly Regex TableKey = DetailKey("table");
@@ -83,6 +85,12 @@ public static class QueryPlanParser
         if (nodes.Count == 0)
             return null;
 
+        // A set operation (union, intersect, except) lists its operands after it, each one an
+        // operand(left) or operand(right) row followed by that operand's own plan. The flow draws one
+        // chain of inputs and cannot show two, so such a plan stays in the plain grid.
+        if (nodes.Any(n => n.Operator.Equals(SetOperationOperand, StringComparison.OrdinalIgnoreCase)))
+            return null;
+
         // A plan comes root first, so the source is the last row. The FROM-less shape is the one
         // exception: it lists constant-source, then project, then limit. The source is the only node
         // with no input, so whichever end holds it is where the flow starts.
@@ -126,7 +134,7 @@ public static class QueryPlanParser
     internal static PlanNodeKind Classify(string name) => name.ToLowerInvariant() switch
     {
         "table-scan" or "index-lookup" or "index-range-scan" or "index-in-list"
-            or "derived-table-scan" or "constant-source" => PlanNodeKind.Source,
+            or "derived-table-scan" or "function-scan" or "constant-source" => PlanNodeKind.Source,
         "nested-loop-join" or "index-nested-loop-join" or "hash-join" or "merge-join"
             or "semi-join" or "anti-join" or "null-aware-anti-join" => PlanNodeKind.Join,
         "filter" or "having-filter" => PlanNodeKind.Filter,
@@ -143,8 +151,20 @@ public static class QueryPlanParser
         "table-scan" => Value(TableKey, detail),
         "index-lookup" or "index-range-scan" or "index-in-list" => Value(IndexKey, detail),
         "derived-table-scan" => Value(AliasKey, detail),
+        "function-scan" => FunctionCall(detail),
         _ => null,
     };
+
+    /// <summary>
+    /// The call of a function in FROM. The detail is <c>generate_series(1, 10), alias=g, column=g</c>:
+    /// the call comes first and can hold commas, so it ends where the alias key starts.
+    /// </summary>
+    private static string? FunctionCall(string detail)
+    {
+        int alias = detail.IndexOf(", alias=", StringComparison.Ordinal);
+        string call = (alias < 0 ? detail : detail[..alias]).Trim();
+        return call.Length == 0 ? null : call;
+    }
 
     /// <summary>
     /// Names a join's second input from the detail text. Only the facts each operator states without

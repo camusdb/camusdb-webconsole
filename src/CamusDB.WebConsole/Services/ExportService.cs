@@ -2,7 +2,6 @@ using System.Globalization;
 using System.Text.Json;
 using CamusDB.WebConsole.Models;
 using CsvHelper;
-using CsvHelper.Configuration;
 
 namespace CamusDB.WebConsole.Services;
 
@@ -90,17 +89,21 @@ public sealed class ExportService
 
     private static string ToCsv(IReadOnlyList<QueryColumn> columns, IEnumerable<object?[]> rows)
     {
-        var config = new CsvConfiguration(CultureInfo.InvariantCulture)
+        var options = new CsvWriterOptions
         {
             NewLine = Environment.NewLine,
+            FormatProvider = CultureInfo.InvariantCulture,
+            // Quote a value with a leading or trailing space, as CsvHelper 33 did, so that a reader that
+            // trims unquoted fields keeps the spaces.
+            Quoting = CsvQuoting.WhenNeededOrWhitespace,
         };
 
         using var writer = new StringWriter();
-        using var csv = new CsvWriter(writer, config);
+        using var csv = CsvWriter.Create(writer, options, leaveOpen: true);
 
         foreach (QueryColumn column in columns)
             csv.WriteField(column.Name);
-        csv.NextRecord();
+        csv.EndRecord();
 
         foreach (object?[] row in rows)
         {
@@ -110,9 +113,11 @@ public sealed class ExportService
                 csv.WriteField(FormatCell(value));
             }
 
-            csv.NextRecord();
+            csv.EndRecord();
         }
 
+        // The writer buffers its output and only disposal flushes it, which happens after this return.
+        csv.Flush();
         return writer.ToString();
     }
 

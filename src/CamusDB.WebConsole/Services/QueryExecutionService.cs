@@ -7,16 +7,24 @@ namespace CamusDB.WebConsole.Services;
 
 public sealed class QueryExecutionService
 {
+    // A statement that starts with '(' is a query: a set operation whose first operand has its own
+    // ORDER BY or LIMIT, as in (SELECT …) UNION SELECT …. DESCRIBE and DESC are SHOW COLUMNS.
     private static readonly Regex ResultSetPrefix = new(
-        @"^\s*(SELECT|SHOW|EXPLAIN|WITH)\b",
+        @"^\s*(\(|(SELECT|SHOW|EXPLAIN|WITH|DESCRIBE|DESC)\b)",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     private static readonly Regex ExplainPrefix = new(
         @"^\s*EXPLAIN\b",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
+    // UPSERT INTO is an INSERT … ON CONFLICT (primary key) DO UPDATE. UPSERT is not a reserved word,
+    // but no other statement starts with it.
+    private static readonly Regex WritePrefix = new(
+        @"^\s*(INSERT|UPSERT|UPDATE|DELETE)\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
     private static readonly Regex InsertPrefix = new(
-        @"^\s*INSERT\b",
+        @"^\s*(INSERT|UPSERT)\b",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     // CREATE DATABASE [IF NOT EXISTS] name [BRANCH FROM source]
@@ -134,12 +142,15 @@ public sealed class QueryExecutionService
             await using CamusCommand command = connection.CreateCamusCommand(sql);
 
             if (IsResultSetStatement(sql))
-                return await ExecuteReaderAsync(command, total, _session.MaxRows, insertReturning: false, explain: IsExplainStatement(sql), cancellationToken).ConfigureAwait(false);
+                return await ExecuteReaderAsync(command, total, _session.MaxRows, writeReturning: null, explain: IsExplainStatement(sql), cancellationToken).ConfigureAwait(false);
 
             // ExecuteNonQuery asks the server to discard the RETURNING rows, so the reader path is the
             // one that shows them.
-            if (IsInsertReturning(sql))
-                return await ExecuteReaderAsync(command, total, _session.MaxRows, insertReturning: true, explain: false, cancellationToken).ConfigureAwait(false);
+            if (IsWriteReturning(sql))
+            {
+                string rowsVerb = InsertPrefix.IsMatch(sql) ? "inserted" : "affected";
+                return await ExecuteReaderAsync(command, total, _session.MaxRows, writeReturning: rowsVerb, explain: false, cancellationToken).ConfigureAwait(false);
+            }
 
             return await ExecuteNonQueryAsync(command, total, cancellationToken).ConfigureAwait(false);
         }
@@ -193,7 +204,7 @@ public sealed class QueryExecutionService
         int offset = previous?.Rows.Count ?? 0;
 
         await using CamusCommand command = connection.CreateCamusCommand(SqlScript.WithPage(sql, pageSize + 1, offset));
-        QueryResultModel page = await ExecuteReaderAsync(command, total, pageSize, insertReturning: false, explain: false, cancellationToken)
+        QueryResultModel page = await ExecuteReaderAsync(command, total, pageSize, writeReturning: null, explain: false, cancellationToken)
             .ConfigureAwait(false);
 
         List<object?[]> rows = previous is null ? [] : [.. previous.Rows];
@@ -222,7 +233,7 @@ public sealed class QueryExecutionService
         CamusCommand command,
         Stopwatch total,
         int maxRows,
-        bool insertReturning,
+        string? writeReturning,
         bool explain,
         CancellationToken cancellationToken)
     {
@@ -286,9 +297,11 @@ public sealed class QueryExecutionService
             ? $"Showing first {rows.Count} of more rows (cap {maxRows})."
             : null;
 
-        if (insertReturning)
+        // A write with a RETURNING list: writeReturning is the verb of the row count, "inserted" or
+        // "affected".
+        if (writeReturning is not null)
         {
-            message = $"Statement completed. Rows inserted: {reader.RecordsAffected}."
+            message = $"Statement completed. Rows {writeReturning}: {reader.RecordsAffected}."
                 + (message is null ? "" : " " + message);
         }
 
@@ -299,7 +312,7 @@ public sealed class QueryExecutionService
             Columns = columns,
             Rows = rows,
             RowsReturned = rows.Count,
-            RowsAffected = insertReturning ? reader.RecordsAffected : null,
+            RowsAffected = writeReturning is not null ? reader.RecordsAffected : null,
             Truncated = truncated,
             MaxRows = maxRows,
             ExecuteDuration = execute.Elapsed,
@@ -336,8 +349,8 @@ public sealed class QueryExecutionService
 
     private static bool IsExplainStatement(string sql) => ExplainPrefix.IsMatch(sql);
 
-    private static bool IsInsertReturning(string sql) =>
-        InsertPrefix.IsMatch(sql) && HasReturningKeyword(sql);
+    private static bool IsWriteReturning(string sql) =>
+        WritePrefix.IsMatch(sql) && HasReturningKeyword(sql);
 
     /// <summary>
     /// True when RETURNING appears as a word outside string literals, backtick names, comments and
