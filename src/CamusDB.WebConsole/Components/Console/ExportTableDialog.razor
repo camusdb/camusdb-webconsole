@@ -74,10 +74,11 @@
             if (result.Truncated)
                 _warning = $"Export truncated at {result.MaxRows:N0} rows ({result.RowsExported:N0} exported).";
 
+            using DotNetStreamReference content = new(new MemoryStream(result.Content));
             await Js.InvokeVoidAsync(
-                "camusDownload.downloadText",
+                "camusDownload.downloadStream",
                 result.FileName,
-                result.Content,
+                content,
                 result.MimeType);
 
             Snackbar.Add($"Exported {result.RowsExported:N0} row(s) to {result.FileName}.", Severity.Success);

@@ -29,6 +29,12 @@ EXPOSE 8080
 
 COPY --from=build-env /app .
 
+# The console must listen on all interfaces INSIDE the container: Docker forwards a
+# published port to the container's network interface, not to its loopback, so a
+# 127.0.0.1 binding here would be unreachable. Who can connect is decided on the host
+# side by `docker run -p`: publish with -p 127.0.0.1:8080:8080 to keep it on the host's
+# loopback. The console has no sign-in of its own; read SECURITY.md before you publish
+# the port beyond the host.
 ENV ASPNETCORE_URLS=http://+:8080
 ENV ASPNETCORE_ENVIRONMENT=Production
 

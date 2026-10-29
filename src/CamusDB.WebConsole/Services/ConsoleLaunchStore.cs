@@ -30,13 +30,22 @@ public sealed class ConsoleLaunchStore
     /// <summary>Window a handoff stays redeemable: one static render to one circuit start.</summary>
     private static readonly TimeSpan HandoffLifetime = TimeSpan.FromSeconds(30);
 
-    private const string LaunchPrefix = "L:";
-    private const string HandoffPrefix = "H:";
+    /// <summary>
+    /// Unspent handoffs one session may hold. A circuit spends its handoff within a second of the page
+    /// load, so only a burst of reloads gets near this — and that burst is all it limits.
+    /// </summary>
+    private const int MaxHandoffsPerSession = 8;
 
-    private sealed record Entry(ConsoleLaunchTicket Ticket, DateTimeOffset ExpiresAt);
+    private sealed record Entry(ConsoleLaunchTicket Ticket, DateTimeOffset ExpiresAt, string? SessionId = null);
 
-    /// <summary>Single-use secrets — launch codes and handoffs — keyed by a prefix so one cannot be spent as the other.</summary>
-    private readonly ConcurrentDictionary<string, Entry> _singleUse = new(StringComparer.Ordinal);
+    /// <summary>
+    /// Launch codes and handoffs are kept apart, so one cannot be spent as the other, and so the
+    /// cheap one does not share a budget with the expensive one. A handoff costs one page load; a
+    /// launch code costs the vendor's key.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, Entry> _launchCodes = new(StringComparer.Ordinal);
+
+    private readonly ConcurrentDictionary<string, Entry> _handoffs = new(StringComparer.Ordinal);
 
     private readonly ConcurrentDictionary<string, Entry> _sessions = new(StringComparer.Ordinal);
 
@@ -57,17 +66,17 @@ public sealed class ConsoleLaunchStore
     {
         Sweep();
 
-        if (_singleUse.Count + _sessions.Count >= _options.MaxLiveEntries)
+        if (_launchCodes.Count + _sessions.Count >= _options.MaxLiveEntries)
             return null;
 
         string code = NewSecret();
         int lifetime = _options.CodeLifetimeSeconds > 0 ? _options.CodeLifetimeSeconds : 60;
-        _singleUse[LaunchPrefix + code] = new Entry(ticket, _clock.GetUtcNow().AddSeconds(lifetime));
+        _launchCodes[code] = new Entry(ticket, _clock.GetUtcNow().AddSeconds(lifetime));
         return code;
     }
 
     public bool TryRedeemLaunchCode(string? code, out ConsoleLaunchTicket? ticket) =>
-        TryRedeemSingleUse(LaunchPrefix, code, out ticket);
+        TryRedeemSingleUse(_launchCodes, code, out ticket);
 
     /// <summary>
     /// Opens the browser session a launch code buys. The returned id is what goes in the cookie.
@@ -76,7 +85,7 @@ public sealed class ConsoleLaunchStore
     {
         Sweep();
 
-        if (_singleUse.Count + _sessions.Count >= _options.MaxLiveEntries)
+        if (_launchCodes.Count + _sessions.Count >= _options.MaxLiveEntries)
             return null;
 
         string sessionId = NewSecret();
@@ -121,18 +130,25 @@ public sealed class ConsoleLaunchStore
         // valid session could otherwise grow the store by reloading — each entry only lives 30
         // seconds, but the ceiling has to be a ceiling. Refusing degrades that one page load to
         // branded-but-unauthenticated rather than letting the process take on unbounded state.
+        //
+        // The per-session limit comes first: without it, one session reloading fast enough would use
+        // up the shared ceiling and refuse the handoffs of every other session.
         Sweep();
 
-        if (_singleUse.Count + _sessions.Count >= _options.MaxLiveEntries)
+        if (_handoffs.Count >= _options.MaxLiveEntries
+            || _handoffs.Values.Count(e => string.Equals(e.SessionId, sessionId, StringComparison.Ordinal))
+                >= MaxHandoffsPerSession)
+        {
             return false;
+        }
 
         handoff = NewSecret();
-        _singleUse[HandoffPrefix + handoff] = new Entry(ticket, _clock.GetUtcNow().Add(HandoffLifetime));
+        _handoffs[handoff] = new Entry(ticket, _clock.GetUtcNow().Add(HandoffLifetime), sessionId);
         return true;
     }
 
     public bool TryRedeemHandoff(string? handoff, out ConsoleLaunchTicket? ticket) =>
-        TryRedeemSingleUse(HandoffPrefix, handoff, out ticket);
+        TryRedeemSingleUse(_handoffs, handoff, out ticket);
 
     public void CloseSession(string? sessionId)
     {
@@ -144,14 +160,17 @@ public sealed class ConsoleLaunchStore
     /// Removal is what makes a secret single-use, so it happens before the expiry check: a value that
     /// arrives too late is still spent, never left behind for a second attempt.
     /// </summary>
-    private bool TryRedeemSingleUse(string prefix, string? secret, out ConsoleLaunchTicket? ticket)
+    private bool TryRedeemSingleUse(
+        ConcurrentDictionary<string, Entry> store,
+        string? secret,
+        out ConsoleLaunchTicket? ticket)
     {
         ticket = null;
 
         if (string.IsNullOrEmpty(secret))
             return false;
 
-        if (!_singleUse.TryRemove(prefix + secret, out Entry? entry))
+        if (!store.TryRemove(secret, out Entry? entry))
             return false;
 
         if (entry.ExpiresAt <= _clock.GetUtcNow())
@@ -170,16 +189,17 @@ public sealed class ConsoleLaunchStore
     {
         DateTimeOffset now = _clock.GetUtcNow();
 
-        foreach (KeyValuePair<string, Entry> kv in _singleUse)
-        {
-            if (kv.Value.ExpiresAt <= now)
-                _singleUse.TryRemove(kv.Key, out _);
-        }
+        SweepStore(_launchCodes, now);
+        SweepStore(_handoffs, now);
+        SweepStore(_sessions, now);
+    }
 
-        foreach (KeyValuePair<string, Entry> kv in _sessions)
+    private static void SweepStore(ConcurrentDictionary<string, Entry> store, DateTimeOffset now)
+    {
+        foreach (KeyValuePair<string, Entry> kv in store)
         {
             if (kv.Value.ExpiresAt <= now)
-                _sessions.TryRemove(kv.Key, out _);
+                store.TryRemove(kv.Key, out _);
         }
     }
 

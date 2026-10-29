@@ -183,6 +183,9 @@ app.UseAntiforgery();
 if (security.RateLimitEnabled)
     app.UseRateLimiter();
 
+if (security.MaxConnectionsPerClient > 0)
+    app.UseMiddleware<CircuitConnectionLimit>(security.MaxConnectionsPerClient);
+
 app.MapStaticAssets();
 app.MapConsoleLaunch();
 app.MapRazorComponents<App>()

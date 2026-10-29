@@ -43,5 +43,5 @@ users of the machine can see it in the process list.
 ## Host it for other users
 
 The tool is for one user on one machine. To serve the console to other machines, use the Docker image
-`camusdb/camusdb-webconsole`, and read the hosting and security notes in the
-[README](https://github.com/camusdb/camusdb-webconsole).
+`camusdb/camusdb-webconsole`, and read
+[SECURITY.md](https://github.com/camusdb/camusdb-webconsole/blob/main/SECURITY.md) first.

@@ -162,8 +162,8 @@ public sealed class ConsoleCommandLine
           -h, --help            Show this help
 
         The console listens on 127.0.0.1 only. To serve other machines, set the address yourself with
-        --urls or ASPNETCORE_URLS, and read the hosting notes in the README first:
-        https://github.com/camusdb/camusdb-webconsole
+        --urls or ASPNETCORE_URLS, and read the security notes first:
+        https://github.com/camusdb/camusdb-webconsole/blob/main/SECURITY.md
 
         Every setting of appsettings.json can also come from the environment, for example
         CamusDB__Endpoint or CamusDB__Password.

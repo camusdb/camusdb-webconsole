@@ -77,4 +77,13 @@ public sealed class ConsoleSecurityOptions
 
     /// <summary>Length of the launch rate-limit window, in seconds.</summary>
     public int LaunchWindowSeconds { get; set; } = 60;
+
+    /// <summary>
+    /// Open connections to the Blazor circuit transport (<c>/_blazor</c>) that one client address may
+    /// hold. Each connection is a circuit, and each circuit holds memory and a database connection in
+    /// this one process, so a script opening thousands of them would starve every other user. One
+    /// browser tab is one connection. Behind a reverse proxy every visitor shares one address — see
+    /// the note above. Zero turns the limit off.
+    /// </summary>
+    public int MaxConnectionsPerClient { get; set; } = 20;
 }

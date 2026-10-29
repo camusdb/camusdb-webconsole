@@ -7,6 +7,8 @@ Blazor Interactive Server + MudBlazor web UI for [CamusDB](https://github.com/ca
 <img width="1450" height="816" alt="webconsole-opt" src="https://github.com/user-attachments/assets/ebfb38b9-fe55-4efd-b103-0e4d8ddb663f" />
 
 
+Before you deploy the console on a network, read [SECURITY.md](SECURITY.md).
+
 ## Requirements
 
 - A running CamusDB instance (REST default port `5095`, gRPC `5096`)
@@ -53,7 +55,7 @@ PUSH=1 NUGET_API_KEY=... tool/publish.sh       # pack and push
 No .NET install required. Pull and run the published image:
 
 ```bash
-docker run --rm -p 8080:8080 \
+docker run --rm -p 127.0.0.1:8080:8080 \
   -e CamusDB__Endpoint=http://host.docker.internal:5095 \
   -e CamusDB__Database=demo \
   camusdb/camusdb-webconsole:latest
@@ -63,13 +65,17 @@ Open [http://localhost:8080](http://localhost:8080).
 
 `host.docker.internal` reaches CamusDB on the host machine (Docker Desktop). On Linux without that DNS name, use the host’s LAN IP or `--add-host=host.docker.internal:host-gateway`.
 
+The `127.0.0.1:` in `-p` publishes the port on the host's loopback address only, so other machines
+cannot connect. The console has **no sign-in of its own**, so do not remove it until you put a gate
+in front. [SECURITY.md](SECURITY.md#a-network-deployment-needs-a-gate-in-front) tells you how.
+
 | Environment variable | Description |
 | --- | --- |
 | `CamusDB__Endpoint` | CamusDB base URL |
 | `CamusDB__Database` | Database name for the session |
 | `CamusDB__Protocol` | `rest` (default) or `grpc` |
-| `CamusDB__TimeoutSeconds` | Request timeout |
-| `CamusDB__MaxRows` | Rows in one page of the results grid, and the cap on a statement the grid cannot page and on exports |
+| `CamusDB__TimeoutSeconds` | Request timeout (at most 600) |
+| `CamusDB__MaxRows` | Rows in one page of the results grid, and the cap on a statement the grid cannot page and on exports (at most 100000) |
 | `CamusDB__User` | User to authenticate as (see [Authentication](#authentication)) |
 | `CamusDB__Password` | That user's password |
 | `CamusDB__AccessToken` | A bearer token obtained elsewhere, instead of logging in |
@@ -119,8 +125,8 @@ On first load the console connects using `appsettings.json`. Use **Configure** i
 | `Endpoint` | CamusDB base URL (`Protocol=grpc` must use the gRPC port) |
 | `Database` | Database name for the session |
 | `Protocol` | `rest` (default) or `grpc` |
-| `TimeoutSeconds` | Request timeout |
-| `MaxRows` | Rows in one page of the results grid, and the cap on a statement the grid cannot page and on exports |
+| `TimeoutSeconds` | Request timeout, in seconds. Values above 600 are reduced to 600 |
+| `MaxRows` | Rows in one page of the results grid, and the cap on a statement the grid cannot page and on exports. Values above 100000 are reduced to 100000 |
 | `User` | User to authenticate as — empty means unauthenticated |
 | `Password` | That user's password |
 | `AccessToken` | A bearer token obtained elsewhere, used verbatim instead of logging in |
@@ -131,59 +137,9 @@ On first load the console connects using `appsettings.json`. Use **Configure** i
 
 ### Security controls
 
-Two throttles, both on by default, and both configured under a `Security` section:
-
-```json
-{
-  "Security": {
-    "LoginThrottleEnabled": true,
-    "LoginFreeAttempts": 3,
-    "LoginMaxAttempts": 10,
-    "LoginSprayMultiplier": 5,
-    "LoginWindowSeconds": 300,
-    "LoginLockoutSeconds": 300,
-    "LoginMaxDelaySeconds": 8,
-    "MaxTrackedClients": 20000,
-    "RateLimitEnabled": true,
-    "LaunchPermitLimit": 30,
-    "LaunchWindowSeconds": 60
-  }
-}
-```
-
-| Key | Description |
-| --- | --- |
-| `LoginThrottleEnabled` | Count and slow failed sign-ins from the Configure dialog |
-| `LoginFreeAttempts` | Failures that cost nothing, so a mistyped password is not punished |
-| `LoginMaxAttempts` | Failures for one address and one user name before the console refuses to try |
-| `LoginSprayMultiplier` | Multiplies the above to give one address's ceiling across every user name |
-| `LoginWindowSeconds` | How long failures are remembered |
-| `LoginLockoutSeconds` | How long a refusal lasts |
-| `LoginMaxDelaySeconds` | Ceiling on the wait added before an attempt |
-| `MaxTrackedClients` | Ceiling on tracked addresses; the entry nearest expiry is dropped to make room |
-| `RateLimitEnabled` | Rate-limit the two vendor launch endpoints per address |
-| `LaunchPermitLimit` | Requests one address may make to each launch endpoint per window |
-| `LaunchWindowSeconds` | Length of that window |
-
-**The sign-in throttle.** CamusDB applies its own login limit, but that limit is per account. A
-caller that tries one password against a thousand account names never reaches it. This throttle
-counts every failure twice — once for the pair (address, user name), once for the address alone — so
-both shapes are covered. The first few failures cost nothing; then a wait is added, doubling per
-failure; past `LoginMaxAttempts` the console refuses to attempt at all. Every failure is written to
-the log, which is the only durable record a guessing run leaves.
-
-**The client address.** Both throttles key on the socket peer address. The console does **not** read
-`X-Forwarded-For`, because a header the caller writes is a key the caller chooses, and a chosen key
-defeats the counting. Behind a reverse proxy every visitor therefore shares one key: wire up
-[forwarded headers](https://learn.microsoft.com/aspnet/core/host-and-deploy/proxy-load-balancer)
-with known proxies, or raise the limits, or turn the sign-in throttle off and rely on the server.
-
-**The endpoint allowlist governs both paths.** `ConsoleLaunch:AllowedEndpoints` — described under
-[the host allowlist](#the-host-allowlist) — is applied to the Configure dialog as well as to a
-vendor launch payload. The dialog is the wider of the two: leg 1 needs the vendor key, while the
-dialog is open to whoever can load the page. The endpoint written in `CamusDB:Endpoint` always
-passes, whatever the list holds, so one missing entry cannot leave the console unable to reach its
-own server.
+The sign-in throttle, the launch rate limit and the connection cap are on by default. They are
+configured under a `Security` section. [SECURITY.md](SECURITY.md#security-controls) gives the keys
+and tells how each control works.
 
 ## Authentication
 
@@ -241,10 +197,8 @@ A user without `SELECT` on a table can still see its name in the schema tree, bu
 
 ### TLS
 
-With authentication enabled the server refuses credential-bearing requests over plaintext, exempting
-loopback so local development works without certificates. Point the console at an `https://` endpoint
-for any non-loopback deployment, or start the server with `--require-tls-when-auth-enabled false` when
-TLS terminates in front of it.
+Use an `https://` endpoint for every CamusDB server that is not on loopback. See
+[SECURITY.md](SECURITY.md#tls).
 
 ### Error codes
 
@@ -334,61 +288,21 @@ name that skipped the gate.
 
 ### ⚠️ `endpoint` in a payload is a request-forgery surface
 
-A launch payload may repoint the session at another CamusDB server. **The console's own process
-opens that URL**, so a payload can reach hosts the visitor cannot — cloud metadata services,
-internal admin ports. The Configure dialog is the same surface and is open to any visitor. Two
-controls exist and you should set one:
-
-- `CamusDB:LockEndpoint=true` — refuses any override outright, from a payload or from the dialog.
-- `ConsoleLaunch:AllowedEndpoints` — the host allowlist, below. It governs both paths.
-
-With neither set, any `http(s)` URL is accepted and the app logs a warning at startup.
-
-A refused payload is told only that the endpoint is not accepted. It is not told which control
-refused it, and the two refusals are byte-identical: told apart, "this console is pinned" and "that
-host is not on the list" let a caller work through candidate host names and read the answer off the
-difference. The reason is written to the log instead, where a run of refusals is visible to an
-operator. Rate limiting (`Security:RateLimitEnabled`) caps how fast that guessing can proceed.
-
-#### The host allowlist
-
-The whole list fits in one environment variable, comma-separated:
-
-```bash
-ConsoleLaunch__AllowedEndpoints="https://db.acme.example,https://replica.acme.example"
-```
-
-Semicolons and whitespace work as separators too, and the indexed form
-(`ConsoleLaunch__AllowedEndpoints__0=…`, `__1=…`) is still accepted — useful when a value itself
-contains a comma. In `appsettings.json` it is an ordinary array.
-
-Entries take either form:
-
-| Entry | Matches |
-| --- | --- |
-| `https://db.acme.example` | that scheme, host and port only (port defaults to 443 here) |
-| `db.acme.example` | that host on **any** scheme and **any** port |
-| `db.acme.example:5095` | that host on port 5095, any scheme |
-
-Matching is on the parsed scheme, host and port — never the raw string — so a path suffix, a
-trailing slash, or a query cannot smuggle one origin past another, and
-`https://db.acme.example.evil.com` does not pass as `https://db.acme.example`. There is **no
-wildcard form**: `*.acme.example` is rejected, deliberately.
-
-An entry that is neither a URL nor a `host[:port]` **fails startup**, naming the entry — a
-silently-skipped entry would leave a list that looks configured and is not. On a good list the
-console logs what it understood:
-
-```
-Console launch endpoint allowlist (2 entries): https://db.acme.example:443, http(s)://internal.example:5095
-```
+A launch payload with `endpoint` makes the console's own process open that URL. Set
+`CamusDB:LockEndpoint=true` or `ConsoleLaunch:AllowedEndpoints`. See
+[SECURITY.md](SECURITY.md#endpoint-changes-are-a-request-forgery-surface) for the two controls and
+the host allowlist.
 
 ### Operational notes
 
 - **Single instance.** Tickets live in process memory. A multi-instance deployment needs sticky
   sessions, or a shared store — a code minted on one node cannot be redeemed on another.
-- `MaxLiveEntries` (default 2000) caps live codes plus sessions plus handoffs. At the ceiling the
-  endpoint fails closed with 503 rather than growing unbounded state that holds access tokens.
+- `MaxLiveEntries` (default 2000) caps live codes plus sessions. At the ceiling the endpoint fails
+  closed with 503 rather than growing unbounded state that holds access tokens. Handoffs have a
+  ceiling of the same size of their own, and one session may hold at most 8 unspent handoffs, so a
+  visitor who reloads fast cannot use up the budget of new launches or of other sessions.
+- Leg 1 accepts a request body of at most 64 KB. Kestrel stops reading a larger body before the
+  key is checked.
 - `RequireHttps` refuses to mint over plaintext, because the API key rides in a request header. Only
   set it false when TLS terminates in front and forwarded headers are not wired up.
 - When `Enabled` is false, both paths answer exactly as any other unmatched URL — a probe cannot
@@ -441,7 +355,9 @@ connection footer showing endpoint, protocol, database, identity, and server ver
 - **Pages.** A `SELECT` without its own `LIMIT` or `OFFSET` gets one page of `MaxRows` rows. The
   console adds `LIMIT MaxRows + 1` to the statement; the extra row only tells that more rows exist.
   **Fetch more** in the results toolbar gets the next page with `OFFSET` and adds its rows to the grid.
-  Without an `ORDER BY`, the server does not promise the same row order on each page.
+  Without an `ORDER BY`, the server does not promise the same row order on each page. One result
+  holds at most 100,000 rows; at that point **Fetch more** stops, and the grid tells you to narrow
+  the query with `WHERE`, or with `LIMIT` and `OFFSET`.
 - Each other statement (`SHOW`, `EXPLAIN`, a `SELECT` with its own `LIMIT`, `INSERT … RETURNING`) is
   read up to `MaxRows` rows, and the grid shows a row-cap warning when the result was truncated.
 - **Sort.** Click a column header to sort ascending, again for descending, and a third time to remove
@@ -582,8 +498,11 @@ src/CamusDB.WebConsole/
 
 ## Notes
 
-- `CamusDB.Client` buffers full query responses; keep `MaxRows` reasonable for large tables — it is
-  the page size of the results grid, and it caps exports and each statement that the grid cannot page.
+- A `SELECT` (also `WITH …` and `(SELECT …) UNION …`) is read through the driver's streaming reader,
+  so the console stops reading at `MaxRows` and the rest of the result never reaches its memory. A
+  `SHOW`, an `EXPLAIN` and a write with `RETURNING` use the buffered reader, which holds the full
+  response before the first row is read. Keep `MaxRows` reasonable for large tables — it is the page
+  size of the results grid, and it caps exports and each statement that the grid cannot page.
 - `CamusSchemaMetadataClient` is not used — metadata endpoints are still stubs in the client; the console uses SQL `SHOW` instead.
 - Schema-tree DDL actions (create/drop table, drop database, create index) are ordinary SQL statements;
   anything they can't express is still available by typing it in the editor.

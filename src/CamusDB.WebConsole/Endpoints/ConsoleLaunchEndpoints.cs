@@ -3,6 +3,7 @@ using System.Text;
 using CamusDB.WebConsole.Models;
 using CamusDB.WebConsole.Options;
 using CamusDB.WebConsole.Services;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 
 namespace CamusDB.WebConsole.Endpoints;
@@ -36,6 +37,13 @@ public static class ConsoleLaunchEndpoints
     private const string ApiKeyHeader = "X-Console-Key";
 
     /// <summary>
+    /// Largest request body leg 1 accepts. The payload is a few short strings, and the body is read
+    /// and parsed before the handler checks the key — so without this ceiling, a caller with no key
+    /// could make the server parse Kestrel's default ~28 MB per request.
+    /// </summary>
+    private const long MaxCreateBodyBytes = 64 * 1024;
+
+    /// <summary>
     /// Rate-limit policy both launch paths sit behind. Neither is reachable without a secret, but
     /// both answer differently depending on the secret they are given, so both are countable oracles
     /// unless the counting is capped somewhere.
@@ -56,7 +64,8 @@ public static class ConsoleLaunchEndpoints
             return;
 
         RouteHandlerBuilder create = app.MapPost("/api/console/sessions", CreateSessionAsync)
-            .DisableAntiforgery();   // server-to-server with a bearer-style key; no browser, no cookie, no CSRF
+            .DisableAntiforgery()   // server-to-server with a bearer-style key; no browser, no cookie, no CSRF
+            .WithMetadata(new RequestSizeLimitAttribute(MaxCreateBodyBytes));
 
         RouteHandlerBuilder launch = app.MapGet("/console/launch", Launch);
 

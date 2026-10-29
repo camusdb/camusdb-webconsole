@@ -460,7 +460,8 @@ else
         try
         {
             ExportResult export = ExportService.ExportRows(Result.Columns, _view, format, baseName);
-            await Js.InvokeVoidAsync("camusDownload.downloadText", export.FileName, export.Content, export.MimeType);
+            using DotNetStreamReference content = new(new MemoryStream(export.Content));
+            await Js.InvokeVoidAsync("camusDownload.downloadStream", export.FileName, content, export.MimeType);
             Snackbar.Add($"Exported {RowsLabel(export.RowsExported)} to {export.FileName}.", Severity.Success);
         }
         catch (Exception ex)

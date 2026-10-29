@@ -67,6 +67,16 @@ public sealed class CamusSessionService : IAsyncDisposable
     /// </summary>
     private const string AdminProbeFallbackSql = "SHOW VARIABLES LIKE 'camus_console_admin_probe_%'";
 
+    /// <summary>
+    /// Ceiling on <see cref="MaxRows"/>, and on the rows one result may hold after Fetch more. The
+    /// driver buffers a whole response, so this is a memory bound, not only a display one — and it
+    /// keeps <c>MaxRows + 1</c> far from <see cref="int.MaxValue"/>.
+    /// </summary>
+    public const int MaxRowsLimit = 100_000;
+
+    /// <summary>Ceiling on <see cref="TimeoutSeconds"/>: a request held open longer holds a circuit and a connection.</summary>
+    public const int MaxTimeoutSeconds = 600;
+
     private readonly object _gate = new();
     private CamusConnection? _connection;
     private CamusConnectionStringBuilder? _builder;
@@ -101,9 +111,9 @@ public sealed class CamusSessionService : IAsyncDisposable
         CamusDbOptions o = options.Value;
         Endpoint = o.Endpoint;
         Database = o.Database;
-        Protocol = string.IsNullOrWhiteSpace(o.Protocol) ? "rest" : o.Protocol;
-        TimeoutSeconds = o.TimeoutSeconds > 0 ? o.TimeoutSeconds : 30;
-        MaxRows = o.MaxRows > 0 ? o.MaxRows : 1000;
+        Protocol = NormalizeProtocol(o.Protocol);
+        TimeoutSeconds = ClampTimeout(o.TimeoutSeconds);
+        MaxRows = ClampMaxRows(o.MaxRows);
         TokenLifetimeSeconds = o.TokenLifetimeSeconds;
         EndpointLocked = o.LockEndpoint;
         AllowInsecureCredentials = o.AllowInsecureCredentials;
@@ -411,15 +421,23 @@ public sealed class CamusSessionService : IAsyncDisposable
             int seconds = Math.Max(1, (int)Math.Ceiling(decision.RetryAfter.TotalSeconds));
 
             _logger.LogWarning(
-                "Refused a sign-in attempt from {ClientKey} for user '{User}': too many failures. "
+                "Refused a sign-in attempt from {ClientKey} for user '{User}': too many failures{Scope}. "
                 + "Blocked for another {Seconds}s.",
-                ClientKey, User, seconds);
+                ClientKey, User, decision.AddressWide ? " across user names from this address" : "", seconds);
 
-            _lastError = $"Too many failed sign-in attempts. Try again in {seconds} seconds.";
+            // The address-wide counter is shared with everyone behind the same NAT or proxy, so its
+            // refusal says whose failures it counts. Without that, a person who typed nothing wrong
+            // cannot tell another user's guessing from their own mistake.
+            string message = decision.AddressWide
+                ? $"Sign-in from this network address is paused for {seconds} seconds after many failed "
+                    + "attempts for different user names. Somebody else on the same network or proxy can "
+                    + "cause this."
+                : $"Too many failed sign-in attempts from this address. Try again in {seconds} seconds.";
+
+            _lastError = message;
             NotifyChanged();
 
-            throw new InvalidOperationException(
-                $"Too many failed sign-in attempts from this address. Try again in {seconds} seconds.");
+            throw new InvalidOperationException(message);
         }
 
         // The wait is served here rather than after the failure so that a caller which abandons the
@@ -673,8 +691,14 @@ public sealed class CamusSessionService : IAsyncDisposable
         }
 
         string newEndpoint = endpoint.Trim();
-        string newProtocol = string.IsNullOrWhiteSpace(protocol) ? "rest" : protocol.Trim();
+        string newProtocol = NormalizeProtocol(protocol);
         string newDatabase = database.Trim();
+
+        // The protocol reaches the connection string like the endpoint does, so it is held to a
+        // whitelist rather than a ';' check: two values are valid, and anything else is an attempt to
+        // append keys the checks below never saw.
+        if (newProtocol is not ("rest" or "grpc"))
+            throw new ArgumentException("Protocol must be 'rest' or 'grpc'.", nameof(protocol));
 
         // The endpoint reaches the driver via a ';'-separated connection string, and the server —
         // not the visitor's browser — opens it. Validate the shape, and honour the deployment lock.
@@ -736,8 +760,8 @@ public sealed class CamusSessionService : IAsyncDisposable
         Endpoint = newEndpoint;
         Database = newDatabase;
         Protocol = newProtocol;
-        TimeoutSeconds = timeoutSeconds > 0 ? timeoutSeconds : 30;
-        MaxRows = maxRows > 0 ? maxRows : 1000;
+        TimeoutSeconds = ClampTimeout(timeoutSeconds);
+        MaxRows = ClampMaxRows(maxRows);
 
         // A supplied token wins over a user/password pair — the driver treats them as exclusive.
         _accessToken = token;
@@ -757,6 +781,18 @@ public sealed class CamusSessionService : IAsyncDisposable
     private bool IsEndpointAllowed(string raw, Uri parsed, string configured) =>
         (configured.Length > 0 && string.Equals(raw, configured, StringComparison.OrdinalIgnoreCase))
         || _allowList.IsAllowed(parsed);
+
+    /// <summary>
+    /// Lower case, so the lock comparison in <see cref="ConfigureAndConnectAsync"/> does not tell a
+    /// configured <c>REST</c> from the dialog's <c>rest</c>.
+    /// </summary>
+    private static string NormalizeProtocol(string? protocol) =>
+        string.IsNullOrWhiteSpace(protocol) ? "rest" : protocol.Trim().ToLowerInvariant();
+
+    // The dialog enforces the same ranges, but the dialog is not the boundary.
+    private static int ClampTimeout(int seconds) => seconds > 0 ? Math.Min(seconds, MaxTimeoutSeconds) : 30;
+
+    private static int ClampMaxRows(int rows) => rows > 0 ? Math.Min(rows, MaxRowsLimit) : 1000;
 
     /// <summary>
     /// Revokes the session's token server-side, forgets the credentials, and drops the connection.

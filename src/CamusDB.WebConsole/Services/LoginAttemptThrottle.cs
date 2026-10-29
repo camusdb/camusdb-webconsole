@@ -27,7 +27,12 @@ public sealed class LoginAttemptThrottle
     /// <param name="Allowed">False when the attempt must not be made at all.</param>
     /// <param name="Delay">How long to wait before attempting. Zero for the first few failures.</param>
     /// <param name="RetryAfter">How long the refusal lasts. Meaningful only when <paramref name="Allowed"/> is false.</param>
-    public readonly record struct ThrottleDecision(bool Allowed, TimeSpan Delay, TimeSpan RetryAfter);
+    /// <param name="AddressWide">
+    /// True when only the counter for the whole address refuses, and the pair for this user name does
+    /// not. Everyone behind one NAT, one proxy or one IPv6 /64 shares that counter, so the failures can
+    /// be another person's — the caller needs to be told so, or it reads as its own typing.
+    /// </param>
+    public readonly record struct ThrottleDecision(bool Allowed, TimeSpan Delay, TimeSpan RetryAfter, bool AddressWide = false);
 
     private sealed class Counter
     {
@@ -172,6 +177,9 @@ public sealed class LoginAttemptThrottle
     /// Drops expired counters, then drops whatever is closest to expiry until the store is inside its
     /// ceiling. Without the second step a caller with many source addresses turns this defence into a
     /// memory leak it controls.
+    ///
+    /// <para>A counter that blocks goes last. It is doing defensive work, and an idle failure count is
+    /// not: dropping blocks first would let a flood from many addresses lift its own earlier blocks.</para>
     /// </summary>
     private void Prune(DateTimeOffset now)
     {
@@ -187,7 +195,7 @@ public sealed class LoginAttemptThrottle
 
         while (_counters.Count >= ceiling)
         {
-            KeyValuePair<string, Counter> oldest = _counters.MinBy(e => e.Value.ExpiresAt);
+            KeyValuePair<string, Counter> oldest = _counters.MinBy(e => (e.Value.BlockedUntil > now, e.Value.ExpiresAt));
 
             if (oldest.Key is null)
                 return;
@@ -207,7 +215,8 @@ public sealed class LoginAttemptThrottle
             TimeSpan retry = a.Allowed ? b.RetryAfter : b.Allowed ? a.RetryAfter
                 : a.RetryAfter > b.RetryAfter ? a.RetryAfter : b.RetryAfter;
 
-            return new ThrottleDecision(false, TimeSpan.Zero, retry);
+            // a is the pair, b the address — see Check.
+            return new ThrottleDecision(false, TimeSpan.Zero, retry, AddressWide: a.Allowed);
         }
 
         return new ThrottleDecision(true, a.Delay > b.Delay ? a.Delay : b.Delay, TimeSpan.Zero);

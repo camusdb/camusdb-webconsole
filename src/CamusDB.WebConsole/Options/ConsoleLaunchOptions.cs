@@ -48,7 +48,8 @@ public sealed class ConsoleLaunchOptions
 
     /// <summary>
     /// Ceiling on live launch codes plus sessions. Reached, the endpoint fails closed with 503 rather
-    /// than letting an unbounded store grow — the entries hold access tokens.
+    /// than letting an unbounded store grow — the entries hold access tokens. Handoffs have a ceiling
+    /// of the same size of their own, and each session may hold only a few of them.
     /// </summary>
     public int MaxLiveEntries { get; set; } = 2_000;
 

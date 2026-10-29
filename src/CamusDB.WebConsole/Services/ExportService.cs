@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using CamusDB.WebConsole.Models;
 using CsvHelper;
@@ -60,6 +61,9 @@ public sealed class ExportService
     /// <summary>
     /// Writes rows that the console already holds (a result in the grid) to CSV or JSON. No query
     /// runs. The file is called <c>{baseName}.csv</c> or <c>{baseName}.json</c>.
+    ///
+    /// <para>The file is written once, as UTF-8 bytes, row by row. A string, or a list of row objects
+    /// to serialize, would hold the whole file two or three times over in the circuit's memory.</para>
     /// </summary>
     public static ExportResult ExportRows(
         IReadOnlyList<QueryColumn> columns,
@@ -67,12 +71,21 @@ public sealed class ExportService
         ExportFormat format,
         string baseName)
     {
-        string content = format switch
+        using MemoryStream output = new();
+
+        switch (format)
         {
-            ExportFormat.Csv => ToCsv(columns, rows),
-            ExportFormat.Json => ToJson(columns, rows),
-            _ => throw new ArgumentOutOfRangeException(nameof(format)),
-        };
+            case ExportFormat.Csv:
+                WriteCsv(output, columns, rows);
+                break;
+            case ExportFormat.Json:
+                WriteJson(output, columns, rows);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(format));
+        }
+
+        byte[] content = output.ToArray();
 
         string ext = format == ExportFormat.Csv ? "csv" : "json";
         string mime = format == ExportFormat.Csv ? "text/csv" : "application/json";
@@ -87,7 +100,7 @@ public sealed class ExportService
         };
     }
 
-    private static string ToCsv(IReadOnlyList<QueryColumn> columns, IEnumerable<object?[]> rows)
+    private static void WriteCsv(Stream output, IReadOnlyList<QueryColumn> columns, IEnumerable<object?[]> rows)
     {
         var options = new CsvWriterOptions
         {
@@ -98,7 +111,8 @@ public sealed class ExportService
             Quoting = CsvQuoting.WhenNeededOrWhitespace,
         };
 
-        using var writer = new StringWriter();
+        // No BOM: the file is the same bytes that the browser made of a string before.
+        using var writer = new StreamWriter(output, new UTF8Encoding(false), leaveOpen: true);
         using var csv = CsvWriter.Create(writer, options, leaveOpen: true);
 
         foreach (QueryColumn column in columns)
@@ -116,28 +130,37 @@ public sealed class ExportService
             csv.EndRecord();
         }
 
-        // The writer buffers its output and only disposal flushes it, which happens after this return.
+        // The writers buffer their output and only disposal flushes it, which happens after the caller
+        // has read the stream.
         csv.Flush();
-        return writer.ToString();
+        writer.Flush();
     }
 
-    private static string ToJson(IReadOnlyList<QueryColumn> columns, IEnumerable<object?[]> rows)
+    private static void WriteJson(Stream output, IReadOnlyList<QueryColumn> columns, IEnumerable<object?[]> rows)
     {
         string[] keys = JsonKeys(columns);
-        var objects = new List<Dictionary<string, object?>>();
+
+        using var json = new Utf8JsonWriter(output, new JsonWriterOptions { Indented = true });
+        json.WriteStartArray();
+
         foreach (object?[] row in rows)
         {
-            var obj = new Dictionary<string, object?>(StringComparer.Ordinal);
+            json.WriteStartObject();
             for (int i = 0; i < columns.Count; i++)
             {
                 object? value = i < row.Length ? row[i] : null;
-                obj[keys[i]] = NormalizeJsonValue(value);
+                json.WritePropertyName(keys[i]);
+
+                // Declared as object, so the serializer writes the value by its runtime type — as it
+                // did for the values of a Dictionary<string, object?>.
+                JsonSerializer.Serialize(json, NormalizeJsonValue(value));
             }
 
-            objects.Add(obj);
+            json.WriteEndObject();
         }
 
-        return JsonSerializer.Serialize(objects, new JsonSerializerOptions { WriteIndented = true });
+        json.WriteEndArray();
+        json.Flush();
     }
 
     /// <summary>
@@ -203,7 +226,8 @@ public sealed class ExportResult
 
     public string? ErrorMessage { get; init; }
 
-    public string Content { get; init; } = "";
+    /// <summary>The file, as UTF-8 bytes.</summary>
+    public byte[] Content { get; init; } = [];
 
     public string FileName { get; init; } = "export.txt";
 

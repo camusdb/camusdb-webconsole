@@ -13,6 +13,13 @@ public sealed class QueryExecutionService
         @"^\s*(\(|(SELECT|SHOW|EXPLAIN|WITH|DESCRIBE|DESC)\b)",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
+    // The statements read through the driver's streaming reader. SHOW, EXPLAIN and DESCRIBE return
+    // metadata and stay on the buffered reader; a write with RETURNING stays there too, because the
+    // streaming reader reports no affected-row count.
+    private static readonly Regex StreamPrefix = new(
+        @"^\s*(\(|(SELECT|WITH)\b)",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
     private static readonly Regex ExplainPrefix = new(
         @"^\s*EXPLAIN\b",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
@@ -142,14 +149,14 @@ public sealed class QueryExecutionService
             await using CamusCommand command = connection.CreateCamusCommand(sql);
 
             if (IsResultSetStatement(sql))
-                return await ExecuteReaderAsync(command, total, _session.MaxRows, writeReturning: null, explain: IsExplainStatement(sql), cancellationToken).ConfigureAwait(false);
+                return await ExecuteReaderAsync(command, total, _session.MaxRows, writeReturning: null, explain: IsExplainStatement(sql), stream: IsStreamStatement(sql), cancellationToken).ConfigureAwait(false);
 
             // ExecuteNonQuery asks the server to discard the RETURNING rows, so the reader path is the
             // one that shows them.
             if (IsWriteReturning(sql))
             {
                 string rowsVerb = InsertPrefix.IsMatch(sql) ? "inserted" : "affected";
-                return await ExecuteReaderAsync(command, total, _session.MaxRows, writeReturning: rowsVerb, explain: false, cancellationToken).ConfigureAwait(false);
+                return await ExecuteReaderAsync(command, total, _session.MaxRows, writeReturning: rowsVerb, explain: false, stream: false, cancellationToken).ConfigureAwait(false);
             }
 
             return await ExecuteNonQueryAsync(command, total, cancellationToken).ConfigureAwait(false);
@@ -191,7 +198,9 @@ public sealed class QueryExecutionService
 
     /// <summary>
     /// Runs <paramref name="sql"/> with <c>LIMIT pageSize + 1</c>. The extra row only tells that a next
-    /// page exists, and the grid does not show it.
+    /// page exists, and the grid does not show it. One result holds at most
+    /// <see cref="CamusSessionService.MaxRowsLimit"/> rows: the rows live in the circuit's memory, and
+    /// each page makes the server scan to a deeper <c>OFFSET</c>.
     /// </summary>
     private async Task<QueryResultModel> ExecutePageAsync(
         CamusConnection connection,
@@ -202,16 +211,23 @@ public sealed class QueryExecutionService
     {
         int pageSize = Math.Max(1, _session.MaxRows);
         int offset = previous?.Rows.Count ?? 0;
+        int limit = Math.Max(pageSize, CamusSessionService.MaxRowsLimit);
 
-        await using CamusCommand command = connection.CreateCamusCommand(SqlScript.WithPage(sql, pageSize + 1, offset));
-        QueryResultModel page = await ExecuteReaderAsync(command, total, pageSize, writeReturning: null, explain: false, cancellationToken)
+        // The last page before the ceiling is shorter, so the result stops exactly at it.
+        int fetch = Math.Min(pageSize, limit - offset);
+        if (fetch <= 0)
+            return previous!;
+
+        await using CamusCommand command = connection.CreateCamusCommand(SqlScript.WithPage(sql, fetch + 1, offset));
+        QueryResultModel page = await ExecuteReaderAsync(command, total, fetch, writeReturning: null, explain: false, stream: true, cancellationToken)
             .ConfigureAwait(false);
 
         List<object?[]> rows = previous is null ? [] : [.. previous.Rows];
         rows.AddRange(page.Rows);
 
         // Truncated means "more rows exist" here, because the query asked for one row more than a page.
-        bool hasMore = page.Truncated;
+        bool atLimit = page.Truncated && rows.Count >= limit;
+        bool hasMore = page.Truncated && !atLimit;
 
         return new QueryResultModel
         {
@@ -223,7 +239,10 @@ public sealed class QueryExecutionService
             MaxRows = pageSize,
             ExecuteDuration = page.ExecuteDuration,
             TotalDuration = page.TotalDuration,
-            Message = hasMore ? $"Showing the first {rows.Count:N0} rows. More rows are available." : null,
+            Message = hasMore ? $"Showing the first {rows.Count:N0} rows. More rows are available."
+                : atLimit ? $"Showing the first {rows.Count:N0} rows, the most that one result holds. "
+                    + "Add a WHERE condition, or a LIMIT and OFFSET, to see other rows."
+                : null,
             PageSql = sql,
             HasMore = hasMore,
         };
@@ -235,12 +254,17 @@ public sealed class QueryExecutionService
         int maxRows,
         string? writeReturning,
         bool explain,
+        bool stream,
         CancellationToken cancellationToken)
     {
         Stopwatch execute = Stopwatch.StartNew();
 
-        await using CamusDataReader reader =
-            await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        // The buffered reader holds the whole response before the first row is read, so maxRows would
+        // cut a result only after all of it is in memory. The streaming reader pulls rows as they are
+        // read, and disposing it at the cap ends the response.
+        await using CamusDataReader reader = stream
+            ? await command.ExecuteStreamReaderAsync(cancellationToken).ConfigureAwait(false)
+            : await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
 
         execute.Stop();
 
@@ -348,6 +372,8 @@ public sealed class QueryExecutionService
     private static bool IsResultSetStatement(string sql) => ResultSetPrefix.IsMatch(sql);
 
     private static bool IsExplainStatement(string sql) => ExplainPrefix.IsMatch(sql);
+
+    private static bool IsStreamStatement(string sql) => StreamPrefix.IsMatch(sql);
 
     private static bool IsWriteReturning(string sql) =>
         WritePrefix.IsMatch(sql) && HasReturningKeyword(sql);
