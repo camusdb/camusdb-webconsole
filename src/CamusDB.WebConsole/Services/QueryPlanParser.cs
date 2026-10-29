@@ -11,8 +11,9 @@ namespace CamusDB.WebConsole.Services;
 /// operator with the columns <c>stage</c>, <c>node</c>, <c>detail</c>, <c>estimated_rows</c> and
 /// <c>estimated_cost</c>, plus the measured columns that EXPLAIN (ANALYZE) adds. After the operators
 /// come rows that describe the whole plan (<c>plan-info</c>, <c>distribution</c>, <c>cache</c>), and
-/// ANALYZE puts a <c>gather-span</c> row after each gather. The parser keeps those apart, because
-/// they are not steps of the flow.</para>
+/// ANALYZE puts span rows after a gather (<c>gather-span</c>) or after a join that ran a broadcast
+/// probe (<c>broadcast-span</c>). The parser keeps those apart, because they are not steps of the
+/// flow.</para>
 /// </summary>
 public static class QueryPlanParser
 {
@@ -21,7 +22,10 @@ public static class QueryPlanParser
         "plan-info", "distribution", "cache",
     };
 
-    private const string GatherSpanRow = "gather-span";
+    private static readonly HashSet<string> SpanRows = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "gather-span", "broadcast-span",
+    };
 
     private const string SetOperationOperand = "operand";
 
@@ -66,7 +70,7 @@ public static class QueryPlanParser
                 continue;
             }
 
-            if (name.Equals(GatherSpanRow, StringComparison.OrdinalIgnoreCase))
+            if (SpanRows.Contains(name))
             {
                 QueryPlanSpan span = new(detail, Long(row, ordinals, "actual_rows"), Long(row, ordinals, "rows_read"));
                 if (nodes.Count > 0)
@@ -85,28 +89,92 @@ public static class QueryPlanParser
         if (nodes.Count == 0)
             return null;
 
-        // A set operation (union, intersect, except) lists its operands after it, each one an
-        // operand(left) or operand(right) row followed by that operand's own plan. The flow draws one
-        // chain of inputs and cannot show two, so such a plan stays in the plain grid.
-        if (nodes.Any(n => n.Operator.Equals(SetOperationOperand, StringComparison.OrdinalIgnoreCase)))
-            return null;
+        List<QueryPlanNode> flow;
 
-        // A plan comes root first, so the source is the last row. The FROM-less shape is the one
-        // exception: it lists constant-source, then project, then limit. The source is the only node
-        // with no input, so whichever end holds it is where the flow starts.
-        if (!(nodes[0].Kind == PlanNodeKind.Source && nodes[^1].Kind != PlanNodeKind.Source))
-            nodes.Reverse();
+        if (nodes.Any(n => n.Kind == PlanNodeKind.SetOperation))
+        {
+            int position = 0;
+            flow = ReadChain(nodes, ref position, branch: false);
+        }
+        else
+        {
+            // A plan comes root first, so the source is the last row. The FROM-less shape is the one
+            // exception: it lists constant-source, then project, then limit. The source is the only
+            // node with no input, so whichever end holds it is where the flow starts.
+            flow = nodes;
+            if (!(flow[0].Kind == PlanNodeKind.Source && flow[^1].Kind != PlanNodeKind.Source))
+                flow.Reverse();
+        }
 
         return new QueryPlanModel
         {
             Stage = stage.Length == 0 ? (isAnalyze ? "analyze" : "physical") : stage,
             IsAnalyze = isAnalyze,
-            Nodes = nodes,
+            Nodes = flow,
             Notes = notes,
-            TotalEstimatedCost = nodes.Sum(n => n.EstimatedCost ?? 0),
-            TotalTimeMs = nodes.Select(n => n.ActualTimeMs).FirstOrDefault(t => t is not null),
+            TotalEstimatedCost = QueryPlanModel.Flatten(flow).Sum(n => n.EstimatedCost ?? 0),
+            TotalTimeMs = flow.Select(n => n.ActualTimeMs).FirstOrDefault(t => t is not null),
         };
     }
+
+    /// <summary>
+    /// Reads one chain from the rows, which come root first in a depth-first walk, and returns it in
+    /// data-flow order. A set operation is followed by its <c>operand(left)</c> row and the left
+    /// chain, then by its <c>operand(right)</c> row and the right chain.
+    ///
+    /// <para>The chain of an operand ends at its source, or at a nested set operation once both of
+    /// its operands are read. The main chain reads every row that is left, so a shape the parser
+    /// does not know still shows each of its operators.</para>
+    /// </summary>
+    private static List<QueryPlanNode> ReadChain(List<QueryPlanNode> rows, ref int position, bool branch)
+    {
+        List<QueryPlanNode> chain = [];
+
+        while (position < rows.Count)
+        {
+            QueryPlanNode node = rows[position];
+
+            // In an operand's chain, the next operand row belongs to the set operation above it.
+            if (branch && IsOperand(node))
+                break;
+
+            position++;
+            chain.Add(node);
+
+            if (node.Kind == PlanNodeKind.SetOperation)
+            {
+                ReadBranch(rows, ref position, node, "left");
+                ReadBranch(rows, ref position, node, "right");
+            }
+
+            if (branch && node.Kind is PlanNodeKind.Source or PlanNodeKind.SetOperation)
+                break;
+        }
+
+        chain.Reverse();
+        return chain;
+    }
+
+    /// <summary>
+    /// Reads one operand of <paramref name="setOperation"/> when the next row is its operand row.
+    /// The side must match, so a nested set operation never takes the right operand of the one
+    /// above it.
+    /// </summary>
+    private static void ReadBranch(List<QueryPlanNode> rows, ref int position, QueryPlanNode setOperation, string side)
+    {
+        if (position >= rows.Count || !IsOperand(rows[position]))
+            return;
+
+        QueryPlanNode operand = rows[position];
+        if (!string.Equals(QueryPlanBranch.SideOf(operand), side, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        position++;
+        setOperation.Branches.Add(new QueryPlanBranch(operand, ReadChain(rows, ref position, branch: true)));
+    }
+
+    private static bool IsOperand(QueryPlanNode node) =>
+        node.Operator.Equals(SetOperationOperand, StringComparison.OrdinalIgnoreCase);
 
     private static QueryPlanNode CreateNode(string name, string detail, object?[] row, Dictionary<string, int> ordinals)
     {
@@ -143,6 +211,7 @@ public static class QueryPlanParser
         "limit" => PlanNodeKind.Limit,
         "project" => PlanNodeKind.Project,
         "gather" => PlanNodeKind.Exchange,
+        "union" or "intersect" or "except" => PlanNodeKind.SetOperation,
         _ => PlanNodeKind.Other,
     };
 
@@ -157,13 +226,15 @@ public static class QueryPlanParser
 
     /// <summary>
     /// The call of a function in FROM. The detail is <c>generate_series(1, 10), alias=g, column=g</c>:
-    /// the call comes first and can hold commas, so it ends where the alias key starts.
+    /// the call comes first and can hold commas, so it ends where the alias key starts. The one-row
+    /// source of a FROM-less operand is <c>*single_row*()</c>, which is not a call a developer wrote,
+    /// so it is left out.
     /// </summary>
     private static string? FunctionCall(string detail)
     {
         int alias = detail.IndexOf(", alias=", StringComparison.Ordinal);
         string call = (alias < 0 ? detail : detail[..alias]).Trim();
-        return call.Length == 0 ? null : call;
+        return call.Length == 0 || call.StartsWith('*') ? null : call;
     }
 
     /// <summary>

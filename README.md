@@ -460,8 +460,8 @@ gets a **Table | Flow** switch in the results toolbar. *Table* is the plain grid
 draws the plan as a diagram that reads from top to bottom: the source operator first, each operator
 below the one that feeds it, and the result last.
 
-- Each operator is a card with its family (source, join, filter, aggregate, sort, limit, output), a
-  one-line description, the server's detail text, and the table or index it reads
+- Each operator is a card with its family (source, join, filter, aggregate, sort, limit, output,
+  set operation), a one-line description, the server's detail text, and the table or index it reads
 - An edge shows the rows that its upper operator produces: the estimate, and with `ANALYZE` the
   measured count too. The edge gets thicker as the row count grows
 - A bar shows each operator's part of the plan's estimated cost, and *Highest cost* marks the
@@ -469,6 +469,10 @@ below the one that feeds it, and the result last.
 - A join has a second input that has no row of its own in the plan. The flow shows it as a dashed box
   beside the join, with what the detail text tells about it (its alias, its index or its subquery
   table)
+- A set operation (`UNION`, `INTERSECT`, `EXCEPT`) has two operands, and each operand has its own
+  plan. A *Left operand* box and a *Right operand* box above the set operation show these plans, side
+  by side when there is room. The edge at the bottom of each box shows the rows that the operand
+  returns. A nested set operation shows its operand boxes inside the box of its own operand
 - With `ANALYZE`, a card also shows the rows read and the KV lookups and scan entries, the summary
   shows the measured time, and *Estimate off N×* marks an operator whose measured rows are ten times
   the estimate or a tenth of it

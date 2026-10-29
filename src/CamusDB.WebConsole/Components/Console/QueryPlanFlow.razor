@@ -1,10 +1,12 @@
 @* Draws an EXPLAIN result as a flow: the source at the top, each operator below the one that feeds
-   it, and the result at the bottom. An edge carries the number of rows its upper node produces. *@
+   it, and the result at the bottom. An edge carries the number of rows its upper node produces.
+   A set operation has two inputs that both have rows: each operand is a box above the set
+   operation, with the operand's own flow inside it, so a nested set operation nests its boxes. *@
 
 <div class="plan-flow-wrap">
     <div class="plan-summary">
         <span class="plan-stage">@Plan.Stage</span>
-        <span>@Plan.Nodes.Count operator@(Plan.Nodes.Count == 1 ? "" : "s")</span>
+        <span>@_operators operator@(_operators == 1 ? "" : "s")</span>
         @if (Plan.TotalEstimatedCost > 0)
         {
             <span>Estimated cost: <strong>@FormatCost(Plan.TotalEstimatedCost)</strong></span>
@@ -16,95 +18,8 @@
         <span class="plan-hint">Rows flow from top to bottom.</span>
     </div>
 
-    <ol class="plan-flow @(_hasSideInputs ? "has-side" : null)" aria-label="Query plan, from the source to the result">
-        @for (int i = 0; i < Plan.Nodes.Count; i++)
-        {
-            QueryPlanNode node = Plan.Nodes[i];
-            QueryPlanNode? upstream = i > 0 ? Plan.Nodes[i - 1] : null;
-            double? share = CostShare(node);
-
-            <li class="plan-step @KindClass(node.Kind)">
-                @if (upstream is not null)
-                {
-                    @Edge(upstream)
-                }
-                <div class="plan-node @(node == _hottest ? "hot" : null)">
-                    <div class="plan-node-head">
-                        <span class="plan-kind-label">@KindLabel(node.Kind)</span>
-                        <span class="plan-op">@node.Operator</span>
-                        @if (node.Target is not null)
-                        {
-                            <span class="plan-target">@node.Target</span>
-                        }
-                        @if (node == _hottest)
-                        {
-                            <span class="plan-badge hot" title="This operator has the highest estimated cost in the plan.">Highest cost</span>
-                        }
-                        @if (EstimateMiss(node) is string miss)
-                        {
-                            <span class="plan-badge warn" title="The planner's row estimate and the measured row count are far apart.">@miss</span>
-                        }
-                    </div>
-                    @if (Describe(node.Operator) is string description)
-                    {
-                        <div class="plan-desc">@description</div>
-                    }
-                    @if (node.Detail.Length > 0)
-                    {
-                        <div class="plan-detail">@node.Detail</div>
-                    }
-                    @if (HasMetrics(node, share))
-                    {
-                        <div class="plan-metrics">
-                            @if (share is double s)
-                            {
-                                <span>est. cost <strong>@FormatCost(node.EstimatedCost!.Value)</strong> (@FormatShare(s))</span>
-                            }
-                            @if (Counter(node, node.RowsRead) is long read)
-                            {
-                                <span>rows read <strong>@read.ToString("N0")</strong></span>
-                            }
-                            @if (Counter(node, node.KvLookups) is long lookups)
-                            {
-                                <span>KV lookups <strong>@lookups.ToString("N0")</strong></span>
-                            }
-                            @if (Counter(node, node.KvScanEntries) is long entries)
-                            {
-                                <span>KV scan entries <strong>@entries.ToString("N0")</strong></span>
-                            }
-                        </div>
-                    }
-                    @if (share is double width)
-                    {
-                        <div class="plan-cost-bar" title="Share of the plan's estimated cost">
-                            <span style="@($"width:{Math.Max(width * 100, 1).ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)}%")"></span>
-                        </div>
-                    }
-                    @if (node.Spans.Count > 0)
-                    {
-                        <ul class="plan-spans">
-                            @foreach (QueryPlanSpan span in node.Spans)
-                            {
-                                <li>@span.Detail</li>
-                            }
-                        </ul>
-                    }
-                </div>
-                @if (node.SideInput is not null)
-                {
-                    <div class="plan-side">
-                        <div class="plan-side-link" aria-hidden="true"></div>
-                        <div class="plan-side-box">
-                            <div class="plan-side-title">@node.SideInput</div>
-                            @if (node.SideDetail is not null)
-                            {
-                                <div class="plan-side-detail">@node.SideDetail</div>
-                            }
-                        </div>
-                    </div>
-                }
-            </li>
-        }
+    <ol class="plan-flow @ChainClass(Plan.Nodes)" aria-label="Query plan, from the source to the result">
+        @Steps(Plan.Nodes)
         <li class="plan-step kind-result">
             @Edge(Plan.Nodes[^1])
             <div class="plan-result">Result</div>
@@ -130,45 +45,208 @@
     public QueryPlanModel Plan { get; set; } = default!;
 
     private QueryPlanNode? _hottest;
-    private bool _hasSideInputs;
+    private int _operators;
 
     protected override void OnParametersSet()
     {
-        _hasSideInputs = Plan.Nodes.Any(n => n.SideInput is not null);
+        List<QueryPlanNode> all = Plan.AllNodes.ToList();
+        _operators = all.Count;
 
         // The badge marks one operator that costs more than each of the others. With one costed
         // operator, or with a tie at the top, there is nothing to single out.
-        List<QueryPlanNode> costed = Plan.Nodes
+        List<QueryPlanNode> costed = all
             .Where(n => n.EstimatedCost > 0)
             .OrderByDescending(n => n.EstimatedCost)
             .ToList();
         _hottest = costed.Count > 1 && costed[0].EstimatedCost > costed[1].EstimatedCost ? costed[0] : null;
     }
 
-    /// <summary>The arrow out of <paramref name="from"/>. Its label and its width give the rows that node produces.</summary>
-    private RenderFragment Edge(QueryPlanNode from) => __builder =>
+    /// <summary>
+    /// The layout classes of one chain: <c>has-side</c> makes room for the side boxes of its joins,
+    /// and <c>has-branches</c> for the operand boxes of its set operation.
+    /// </summary>
+    private static string ChainClass(IReadOnlyList<QueryPlanNode> nodes) => string.Join(' ', new[]
     {
-        long? rows = from.ActualRows ?? from.EstimatedRows;
-        string? label = EdgeLabel(from);
+        nodes.Any(n => n.SideInput is not null) ? "has-side" : null,
+        nodes.Any(n => n.Branches.Count > 0) ? "has-branches" : null,
+    }.Where(c => c is not null));
+
+    /// <summary>The steps of one chain, each with the edge from the step above it.</summary>
+    private RenderFragment Steps(IReadOnlyList<QueryPlanNode> nodes) => __builder =>
+    {
+        for (int i = 0; i < nodes.Count; i++)
+        {
+            QueryPlanNode node = nodes[i];
+            QueryPlanNode? upstream = i > 0 ? nodes[i - 1] : null;
+
+            if (node.Branches.Count > 0)
+            {
+                @Branches(node)
+            }
+
+            @Step(node, upstream)
+        }
+    };
+
+    /// <summary>
+    /// The operand boxes of a set operation, side by side when there is room. The last edge in a box
+    /// carries the rows the operand returns. The operand row counts them under ANALYZE; plain EXPLAIN
+    /// gives the operand no count, so the estimate of the operand's last operator stands.
+    /// </summary>
+    private RenderFragment Branches(QueryPlanNode setOperation) => __builder =>
+    {
+        <li class="plan-branches">
+            @foreach (QueryPlanBranch branch in setOperation.Branches)
+            {
+                string title = branch.Side.Length == 0 ? "Operand" : $"{char.ToUpperInvariant(branch.Side[0])}{branch.Side[1..]} operand";
+
+                <section class="plan-operand" aria-label="@title">
+                    <div class="plan-operand-title">@title</div>
+                    @if (branch.Nodes.Count > 0)
+                    {
+                        QueryPlanNode last = branch.Nodes[^1];
+
+                        <ol class="plan-flow plan-flow-nested @ChainClass(branch.Nodes)">
+                            @Steps(branch.Nodes)
+                            <li class="plan-step">
+                                @Edge(branch.Operand.ActualRows ?? last.ActualRows,
+                                    branch.Operand.EstimatedRows ?? last.EstimatedRows,
+                                    $"Rows that the {title.ToLowerInvariant()} returns")
+                            </li>
+                        </ol>
+                    }
+                    else
+                    {
+                        <div class="plan-desc">The plan shows no operator for this operand.</div>
+                    }
+                </section>
+            }
+        </li>
+    };
+
+    /// <summary>
+    /// One operator, with the edge from <paramref name="upstream"/>. A set operation has no upstream
+    /// node: its edge comes from the operand boxes above it and carries no label.
+    /// </summary>
+    private RenderFragment Step(QueryPlanNode node, QueryPlanNode? upstream) => __builder =>
+    {
+        double? share = CostShare(node);
+
+        <li class="plan-step @KindClass(node.Kind)">
+            @if (upstream is not null)
+            {
+                @Edge(upstream)
+            }
+            else if (node.Branches.Count > 0)
+            {
+                @Edge(null, null, null)
+            }
+            <div class="plan-node @(node == _hottest ? "hot" : null)">
+                <div class="plan-node-head">
+                    <span class="plan-kind-label">@KindLabel(node.Kind)</span>
+                    <span class="plan-op">@node.Operator</span>
+                    @if (node.Target is not null)
+                    {
+                        <span class="plan-target">@node.Target</span>
+                    }
+                    @if (node == _hottest)
+                    {
+                        <span class="plan-badge hot" title="This operator has the highest estimated cost in the plan.">Highest cost</span>
+                    }
+                    @if (EstimateMiss(node) is string miss)
+                    {
+                        <span class="plan-badge warn" title="The planner's row estimate and the measured row count are far apart.">@miss</span>
+                    }
+                </div>
+                @if (Describe(node.Operator) is string description)
+                {
+                    <div class="plan-desc">@description</div>
+                }
+                @if (node.Detail.Length > 0)
+                {
+                    <div class="plan-detail">@node.Detail</div>
+                }
+                @if (HasMetrics(node, share))
+                {
+                    <div class="plan-metrics">
+                        @if (share is double s)
+                        {
+                            <span>est. cost <strong>@FormatCost(node.EstimatedCost!.Value)</strong> (@FormatShare(s))</span>
+                        }
+                        @if (Counter(node, node.RowsRead) is long read)
+                        {
+                            <span>rows read <strong>@read.ToString("N0")</strong></span>
+                        }
+                        @if (Counter(node, node.KvLookups) is long lookups)
+                        {
+                            <span>KV lookups <strong>@lookups.ToString("N0")</strong></span>
+                        }
+                        @if (Counter(node, node.KvScanEntries) is long entries)
+                        {
+                            <span>KV scan entries <strong>@entries.ToString("N0")</strong></span>
+                        }
+                    </div>
+                }
+                @if (share is double width)
+                {
+                    <div class="plan-cost-bar" title="Share of the plan's estimated cost">
+                        <span style="@($"width:{Math.Max(width * 100, 1).ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)}%")"></span>
+                    </div>
+                }
+                @if (node.Spans.Count > 0)
+                {
+                    <ul class="plan-spans">
+                        @foreach (QueryPlanSpan span in node.Spans)
+                        {
+                            <li>@span.Detail</li>
+                        }
+                    </ul>
+                }
+            </div>
+            @if (node.SideInput is not null)
+            {
+                <div class="plan-side">
+                    <div class="plan-side-link" aria-hidden="true"></div>
+                    <div class="plan-side-box">
+                        <div class="plan-side-title">@node.SideInput</div>
+                        @if (node.SideDetail is not null)
+                        {
+                            <div class="plan-side-detail">@node.SideDetail</div>
+                        }
+                    </div>
+                </div>
+            }
+        </li>
+    };
+
+    /// <summary>The arrow out of <paramref name="from"/>. Its label and its width give the rows that node produces.</summary>
+    private RenderFragment Edge(QueryPlanNode from) =>
+        Edge(from.ActualRows, from.EstimatedRows, $"Rows that {from.Operator} produces");
+
+    /// <summary>An arrow that carries the given rows. With no count at all, it has no label.</summary>
+    private RenderFragment Edge(long? actualRows, long? estimatedRows, string? title) => __builder =>
+    {
+        long? rows = actualRows ?? estimatedRows;
+        string? label = EdgeLabel(actualRows, estimatedRows);
         <div class="plan-edge" style="@($"--edge-w:{EdgeWidth(rows)}px")">
             <span class="plan-edge-line"></span>
             <span class="plan-edge-arrow"></span>
             @if (label is not null)
             {
-                <span class="plan-edge-label" title="@($"Rows that {from.Operator} produces")">@label</span>
+                <span class="plan-edge-label" title="@title">@label</span>
             }
         </div>
     };
 
-    private static string? EdgeLabel(QueryPlanNode from)
+    private static string? EdgeLabel(long? actualRows, long? estimatedRows)
     {
-        if (from.ActualRows is long actual)
+        if (actualRows is long actual)
         {
             string text = $"{actual:N0} row{(actual == 1 ? "" : "s")}";
-            return from.EstimatedRows is long estimated ? $"{text} · est. {estimated:N0}" : text;
+            return estimatedRows is long estimated ? $"{text} · est. {estimated:N0}" : text;
         }
 
-        return from.EstimatedRows is long rows ? $"est. {rows:N0} row{(rows == 1 ? "" : "s")}" : null;
+        return estimatedRows is long rows ? $"est. {rows:N0} row{(rows == 1 ? "" : "s")}" : null;
     }
 
     // A log scale, so a million rows reads as a thick edge without a one-row edge disappearing.
@@ -232,6 +310,7 @@
         PlanNodeKind.Limit => "Limit",
         PlanNodeKind.Project => "Output",
         PlanNodeKind.Exchange => "Exchange",
+        PlanNodeKind.SetOperation => "Set operation",
         _ => "Step",
     };
 
@@ -242,6 +321,7 @@
         "index-range-scan" => "Reads a range of keys from an index.",
         "index-in-list" => "Looks up each value of an IN list in an index.",
         "derived-table-scan" => "Reads the rows of a subquery in FROM.",
+        "function-scan" => "Makes rows with a function in FROM, without reading a table.",
         "constant-source" => "Makes one row without reading a table.",
         "filter" => "Keeps only the rows that match the condition.",
         "having-filter" => "Keeps only the groups that match HAVING.",
@@ -259,6 +339,10 @@
         "anti-join" => "Keeps each row that has no match in the subquery (NOT IN, NOT EXISTS).",
         "null-aware-anti-join" => "Keeps each row that has no match in the subquery, with the NULL rules of NOT IN.",
         "gather" => "Collects the rows from the partitions of the cluster.",
+        "lock_rows" => "Locks each row before it passes the row on (FOR UPDATE).",
+        "union" => "Returns the rows of both operands. Without ALL, it removes duplicate rows.",
+        "intersect" => "Returns the rows that are in both operands.",
+        "except" => "Returns the rows of the left operand that are not in the right operand.",
         _ => null,
     };
 

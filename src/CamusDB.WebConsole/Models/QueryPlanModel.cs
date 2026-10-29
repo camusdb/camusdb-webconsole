@@ -11,6 +11,7 @@ public enum PlanNodeKind
     Limit,
     Project,
     Exchange,
+    SetOperation,
     Other,
 }
 
@@ -21,6 +22,10 @@ public enum PlanNodeKind
 /// it emits the chain root first. A join is a link in that chain whose left input is the next row;
 /// its right input never gets a row of its own, so the join's detail text is the only place that
 /// names it (see <see cref="QueryPlanNode.SideInput"/>).</para>
+///
+/// <para>A set operation (UNION, INTERSECT, EXCEPT) is the one place where the plan branches. It is
+/// the source of its chain, and each of its two operands is a chain of its own under an
+/// <c>operand</c> row (see <see cref="QueryPlanNode.Branches"/>).</para>
 /// </summary>
 public sealed class QueryPlanModel
 {
@@ -33,6 +38,9 @@ public sealed class QueryPlanModel
     /// <summary>The operators in data-flow order: the first one reads the source, the last one feeds the result.</summary>
     public required IReadOnlyList<QueryPlanNode> Nodes { get; init; }
 
+    /// <summary>Every operator of the plan: the main chain and, under each set operation, the chains of its operands.</summary>
+    public IEnumerable<QueryPlanNode> AllNodes => Flatten(Nodes);
+
     /// <summary>The trailing rows that describe the whole plan, such as <c>plan-info</c> and <c>cache</c>.</summary>
     public IReadOnlyList<QueryPlanNote> Notes { get; init; } = [];
 
@@ -41,6 +49,9 @@ public sealed class QueryPlanModel
 
     /// <summary>Measured wall-clock time of the whole plan. Only EXPLAIN (ANALYZE) reports it.</summary>
     public double? TotalTimeMs { get; init; }
+
+    internal static IEnumerable<QueryPlanNode> Flatten(IEnumerable<QueryPlanNode> nodes) =>
+        nodes.SelectMany(n => n.Branches.SelectMany(b => Flatten(b.Nodes)).Prepend(n));
 }
 
 public sealed class QueryPlanNode
@@ -80,8 +91,26 @@ public sealed class QueryPlanNode
 
     public long? KvScanEntries { get; init; }
 
-    /// <summary>The <c>gather-span</c> rows that EXPLAIN (ANALYZE) emits after a gather, one per partition span.</summary>
+    /// <summary>
+    /// The span rows that EXPLAIN (ANALYZE) emits after a gather (<c>gather-span</c>) or after a join
+    /// that ran a broadcast probe (<c>broadcast-span</c>), one per span.
+    /// </summary>
     public List<QueryPlanSpan> Spans { get; } = [];
+
+    /// <summary>The left and the right operand of a set operation. Empty for any other operator.</summary>
+    public List<QueryPlanBranch> Branches { get; } = [];
+}
+
+/// <summary>
+/// One operand of a set operation: the <c>operand</c> row, which under EXPLAIN (ANALYZE) counts the
+/// rows the operand returned, and the operand's own chain in data-flow order.
+/// </summary>
+public sealed record QueryPlanBranch(QueryPlanNode Operand, IReadOnlyList<QueryPlanNode> Nodes)
+{
+    /// <summary><c>left</c> or <c>right</c>, as the detail of the operand row gives it.</summary>
+    public string Side => SideOf(Operand);
+
+    internal static string SideOf(QueryPlanNode operand) => operand.Detail.Split(',')[0].Trim();
 }
 
 public sealed record QueryPlanSpan(string Detail, long? ActualRows, long? RowsRead);
