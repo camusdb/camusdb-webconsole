@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
-    <Version>0.16.3</Version>
+    <Version>0.17.0</Version>
     <Description>CamusDB.WebConsole allows database management from a Web UI.</Description>
     <Authors>CamusDB</Authors>
     <Company>CamusDB</Company>
@@ -43,7 +43,7 @@
 
   <ItemGroup>
     <PackageReference Include="BlazorMonaco" Version="3.5.0" />
-    <PackageReference Include="CamusDB.Client" Version="0.17.1" />
+    <PackageReference Include="CamusDB.Client" Version="0.17.2" />
     <PackageReference Include="CsvHelper" Version="34.0.0" />
     <!-- Pinned: every release of the tool and the image must be the same build of its dependencies. -->
     <PackageReference Include="MudBlazor" Version="9.11.0" />
