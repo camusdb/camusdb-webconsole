@@ -24,7 +24,17 @@
                     <MudSelectItem Value="@col.Name">@col.Name (@(col.Type ?? "?"))</MudSelectItem>
                 }
             </MudSelect>
-            <MudCheckBox @bind-Value="_unique" Label="Unique" Dense="true" />
+            @if (IsGin)
+            {
+                <MudAlert Severity="Severity.Info" Dense="true">
+                    A JSONB column takes a GIN index (USING GIN), which serves @@&gt;, ?, ?|, ?&amp; and
+                    -&gt;&gt; equality in WHERE. A GIN index has one column and cannot be unique.
+                </MudAlert>
+            }
+            else
+            {
+                <MudCheckBox @bind-Value="_unique" Label="Unique" Dense="true" />
+            }
             @if (!string.IsNullOrEmpty(_error))
             {
                 <MudAlert Severity="Severity.Error" Dense="true">@_error</MudAlert>
@@ -69,6 +79,15 @@
             _indexName = $"idx_{_table}_{_columns[0].Name}";
     }
 
+    /// <summary>
+    /// True when a selected column is JSONB. Such a column has no ordered key, so the only index it
+    /// can have is a GIN index.
+    /// </summary>
+    private bool IsGin => _selectedColumns.Any(IsJsonbColumn);
+
+    private bool IsJsonbColumn(string name) =>
+        _columns.Any(c => c.Name == name && SqlBuilder.IsJsonbType(c.Type));
+
     private void Cancel() => MudDialog.Cancel();
 
     private async Task CreateAsync()
@@ -88,10 +107,17 @@
             return;
         }
 
+        bool gin = IsGin;
+        if (gin && cols.Count != 1)
+        {
+            _error = "A GIN index has exactly one column. Select only the JSONB column.";
+            return;
+        }
+
         string sql;
         try
         {
-            sql = SqlBuilder.BuildCreateIndex(_indexName.Trim(), _table, cols, _unique);
+            sql = SqlBuilder.BuildCreateIndex(_indexName.Trim(), _table, cols, unique: _unique && !gin, gin);
         }
         catch (Exception ex)
         {

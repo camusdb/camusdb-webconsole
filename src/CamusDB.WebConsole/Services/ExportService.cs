@@ -151,6 +151,15 @@ public sealed class ExportService
                 object? value = i < row.Length ? row[i] : null;
                 json.WritePropertyName(keys[i]);
 
+                // A JSONB cell is the document itself, not a string that holds its text. The server
+                // made the text, so it is valid JSON, and a check here would stop at 64 levels while a
+                // document can have 512. A JSON null document and SQL NULL both write null.
+                if (value is JsonbText document)
+                {
+                    json.WriteRawValue(document.Text, skipInputValidation: true);
+                    continue;
+                }
+
                 // Declared as object, so the serializer writes the value by its runtime type — as it
                 // did for the values of a Dictionary<string, object?>.
                 JsonSerializer.Serialize(json, NormalizeJsonValue(value));

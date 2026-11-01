@@ -8,6 +8,7 @@ public enum PlanNodeKind
     Filter,
     Aggregate,
     Sort,
+    Window,
     Limit,
     Project,
     Exchange,

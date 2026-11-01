@@ -64,6 +64,20 @@
                                             }
                                         </div>
                                     }
+                                    else if (SqlBuilder.IsJsonbType(field.Type))
+                                    {
+                                        @* One JSON document. The NULL box is SQL NULL; the text null is a JSON null document. *@
+                                        <MudTextField @bind-Value="field.Text"
+                                                      Variant="Variant.Outlined"
+                                                      Margin="Margin.Dense"
+                                                      Immediate="true"
+                                                      Lines="@JsonLines(field.Text)"
+                                                      Disabled="field.IsPrimaryKey || field.IsNull"
+                                                      Class="edit-record-input edit-record-json"
+                                                      Placeholder="{}"
+                                                      Error="!string.IsNullOrEmpty(field.Error)"
+                                                      ErrorText="@field.Error" />
+                                    }
                                     else
                                     {
                                         <MudTextField @bind-Value="field.Text"
@@ -182,10 +196,26 @@
     private static string FormatInitial(object value) => value switch
     {
         bool b => b ? "true" : "false",
+        JsonbText document => document.Indented(),
         DateTime dt => dt.ToString("yyyy-MM-dd HH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture),
         DateOnly d => d.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture),
         _ => Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture) ?? "",
     };
+
+    /// <summary>
+    /// The height of a JSONB field: the line count of its text, from 3 to 12 lines.
+    /// </summary>
+    private static int JsonLines(string? text)
+    {
+        int lines = 1;
+        foreach (char c in text ?? "")
+        {
+            if (c == '\n')
+                lines++;
+        }
+
+        return Math.Clamp(lines, 3, 12);
+    }
 
     private async Task OnIntegerInput(FieldDraft field, ChangeEventArgs e)
     {

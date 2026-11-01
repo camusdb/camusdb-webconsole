@@ -28,6 +28,7 @@ public static class SqlBuilder
         "DATE",
         "DATETIME",
         "BYTES",
+        "JSONB",
     ];
 
     /// <summary>
@@ -47,7 +48,7 @@ public static class SqlBuilder
         "GUID", "HAVING", "IDENTIFIED", "IF", "ILIKE", "IN", "INCLUDE", "INDEX", "INDEXES", "INITIALLY",
         "INNER", "INSERT", "INT", "INT64", "INTEGER", "INTERSECT", "INTO", "IS", "JOIN", "KEY", "LEFT", "LIKE",
         "LIMIT", "MATERIALIZED", "NOT", "NULL", "NUMERIC", "OBJECT_ID", "OFFSET", "OID", "ON", "OR",
-        "ORDER", "ORPHAN", "OUTER", "PRIMARY", "PRIVILEGES", "REAL", "REFERENCES", "REFRESH", "RELINK",
+        "ORDER", "ORPHAN", "OUTER", "OVER", "PRIMARY", "PRIVILEGES", "REAL", "REFERENCES", "REFRESH", "RELINK",
         "RENAME", "RESET", "RETURNING", "REVOKE", "RIGHT", "ROLLBACK",
         "SELECT", "SEQUENCE", "SEQUENCES", "SET", "SHOW", "SMALLINT", "START", "STRING", "TABLE",
         "TABLES", "TEXT", "THEN", "TIMESTAMP", "TO", "TRANSACTION", "TRUE", "TRUNCATE", "UNION", "UNIQUE",
@@ -109,6 +110,7 @@ public static class SqlBuilder
         {
             bool b => b ? "TRUE" : "FALSE",
             NumericText n => NumericLiteral(n.Text),
+            JsonbText j => JsonbLiteral(j.Text),
             decimal m => NumericLiteral(m.ToString(CultureInfo.InvariantCulture)),
             sbyte or byte or short or ushort or int or uint or long or ulong or float or double
                 => Convert.ToString(value, CultureInfo.InvariantCulture) ?? "NULL",
@@ -141,6 +143,9 @@ public static class SqlBuilder
             string trimmed = text.Trim();
             return IsValidNumericLiteral(trimmed) ? NumericLiteral(trimmed) : QuoteString(text);
         }
+
+        if (IsJsonbType(type))
+            return JsonbLiteral(JsonbText.Compact(text));
 
         if (IsNumericType(type))
         {
@@ -340,16 +345,32 @@ public static class SqlBuilder
         return $"SHOW CREATE TABLE {QuoteIdent(table)}";
     }
 
+    /// <summary>
+    /// <c>CREATE [UNIQUE] INDEX name ON t (cols)</c>, or with <paramref name="gin"/>
+    /// <c>CREATE INDEX name ON t USING GIN (col)</c>. A GIN index has exactly one column, which must be
+    /// JSONB, and it cannot be unique. A JSONB column cannot be in an ordered index at all.
+    /// </summary>
     public static string BuildCreateIndex(
         string indexName,
         string table,
         IReadOnlyList<string> columns,
-        bool unique)
+        bool unique,
+        bool gin = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(indexName);
         ArgumentException.ThrowIfNullOrWhiteSpace(table);
         if (columns.Count == 0)
             throw new ArgumentException("At least one column is required.", nameof(columns));
+
+        if (gin)
+        {
+            if (columns.Count != 1)
+                throw new ArgumentException("A GIN index has exactly one column.", nameof(columns));
+            if (unique)
+                throw new ArgumentException("A GIN index cannot be unique.", nameof(unique));
+
+            return $"CREATE INDEX {QuoteIdent(indexName)} ON {QuoteIdent(table)} USING GIN ({QuoteIdent(columns[0])})";
+        }
 
         string prefix = unique ? "CREATE UNIQUE INDEX " : "CREATE INDEX ";
         string cols = string.Join(", ", columns.Select(QuoteIdent));
@@ -521,6 +542,14 @@ public static class SqlBuilder
             return false;
         }
 
+        if (IsJsonbType(type))
+        {
+            if (JsonbText.IsValid(trimmed, out string? jsonError))
+                return true;
+            error = jsonError;
+            return false;
+        }
+
         if (IsIntegerType(type))
         {
             if (IsValidIntegerLiteral(trimmed))
@@ -582,6 +611,20 @@ public static class SqlBuilder
     /// it can miss the row. The typed literal is exact in both places and can use an index.
     /// </summary>
     public static string NumericLiteral(string text) => "NUMERIC " + QuoteString(text.Trim());
+
+    /// <summary>
+    /// JSONB and its alias JSON. SHOW COLUMNS and SHOW CREATE TABLE print <c>JSONB</c>, and the client
+    /// reports the result column type as <c>Jsonb</c>.
+    /// </summary>
+    public static bool IsJsonbType(string? type) =>
+        CanonicalType(type) == "JSONB";
+
+    /// <summary>
+    /// The typed literal <c>JSONB '…'</c>. A plain text literal is also parsed as a document where a
+    /// document belongs, but the typed literal says so in every place: in a DEFAULT, in a SET, and in
+    /// a comparison. The server stores the canonical form, so the spacing of the text does not matter.
+    /// </summary>
+    public static string JsonbLiteral(string text) => "JSONB " + QuoteString(text.Trim());
 
     public static bool IsIntegerType(string? type)
     {
@@ -816,7 +859,7 @@ public static class SqlBuilder
         expression is not null && expression.EndsWith(')');
 
     public static string DefaultPlaceholder(string? type) =>
-        IsNumericType(type) ? "0" : IsBoolType(type) ? "false" : "value";
+        IsNumericType(type) ? "0" : IsBoolType(type) ? "false" : IsJsonbType(type) ? "{}" : "value";
 
     /// <summary>
     /// Collapses the type spellings the lexer treats as synonyms onto one name, so a DEFAULT
@@ -846,6 +889,7 @@ public static class SqlBuilder
             "STRING" or "VARCHAR" or "CHAR" or "TEXT" => "STRING",
             "BOOL" or "BOOLEAN" => "BOOL",
             "BYTES" or "BLOB" => "BYTES",
+            "JSONB" or "JSON" => "JSONB",
             _ => t.ToUpperInvariant(),
         };
     }

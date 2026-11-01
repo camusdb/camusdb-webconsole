@@ -270,10 +270,12 @@ public sealed class QueryExecutionService
 
         List<QueryColumn> columns = new(reader.FieldCount);
         bool[] numeric = new bool[reader.FieldCount];
+        bool[] jsonb = new bool[reader.FieldCount];
         for (int i = 0; i < reader.FieldCount; i++)
         {
             string typeName = reader.GetDataTypeName(i);
             numeric[i] = string.Equals(typeName, nameof(ColumnType.Numeric), StringComparison.Ordinal);
+            jsonb[i] = string.Equals(typeName, nameof(ColumnType.Jsonb), StringComparison.Ordinal);
 
             columns.Add(new QueryColumn
             {
@@ -305,6 +307,15 @@ public sealed class QueryExecutionService
                 if (numeric[i])
                 {
                     values[i] = new NumericText(reader.GetString(i));
+                    continue;
+                }
+
+                // GetString gives the PostgreSQL text form of the document on every transport. The
+                // client asks REST for that form, so a JSON null document is the text "null" here
+                // and SQL NULL is caught by IsDBNull above.
+                if (jsonb[i])
+                {
+                    values[i] = new JsonbText(reader.GetString(i));
                     continue;
                 }
 

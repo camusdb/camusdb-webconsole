@@ -141,6 +141,7 @@ public sealed class SchemaExplorerService(CamusSessionService session)
             string? cols = ReadField(reader, ordinals, "Column_name", "Columns", "columns", "Column");
             string? uniqueRaw = ReadField(reader, ordinals, "Unique", "unique");
             string? nonUnique = ReadField(reader, ordinals, "Non_unique", "non_unique");
+            string? method = ReadField(reader, ordinals, "Index_type", "index_type");
 
             bool unique = uniqueRaw is "1" or "true" or "True" or "UNIQUE"
                 || nonUnique is "0" or "false" or "False";
@@ -150,6 +151,7 @@ public sealed class SchemaExplorerService(CamusSessionService session)
                 Name = name,
                 Columns = cols,
                 Unique = unique,
+                Method = method,
             });
         }
 
@@ -390,7 +392,7 @@ public sealed class SchemaExplorerService(CamusSessionService session)
                 Kind = CamusSchemaNodeKind.Index,
                 Database = database,
                 Table = table,
-                Detail = index.Columns,
+                Detail = index.Detail,
                 ChildrenLoaded = true,
             });
         }

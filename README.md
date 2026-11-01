@@ -349,6 +349,9 @@ connection footer showing endpoint, protocol, database, identity, and server ver
 - `INSERT … RETURNING` shows the returned rows in the grid, with the inserted-row count
 - A `NUMERIC` cell shows its exact text, all 38 digits. JSON export writes it as a string, as the
   server does
+- A `JSONB` cell shows the document in the PostgreSQL text form (`{"a": 1, "b": [2]}`). A long
+  document is cut in the cell, and its tooltip shows the full text. JSON export writes the document
+  itself, not a string that holds it. A JSON `null` document shows `null`, and SQL `NULL` shows `NULL`
 
 ### Results grid
 
@@ -376,8 +379,9 @@ gets a **Table | Flow** switch in the results toolbar. *Table* is the plain grid
 draws the plan as a diagram that reads from top to bottom: the source operator first, each operator
 below the one that feeds it, and the result last.
 
-- Each operator is a card with its family (source, join, filter, aggregate, sort, limit, output,
-  set operation), a one-line description, the server's detail text, and the table or index it reads
+- Each operator is a card with its family (source, join, filter, aggregate, sort, window, limit,
+  output, set operation), a one-line description, the server's detail text, and the table or index it
+  reads. A `gin-scan` is a source that reads a GIN index
 - An edge shows the rows that its upper operator produces: the estimate, and with `ANALYZE` the
   measured count too. The edge gets thicker as the row count grows
 - A bar shows each operator's part of the plan's estimated cost, and *Highest cost* marks the
@@ -430,6 +434,10 @@ SEQUENCES`) are listed after its tables; hover one to see its start, increment, 
 - In *Create a Table*, an `INT64` column accepts `nextval('seq')` as its default
 - In *Create a Table*, a `NUMERIC` column takes a decimal default such as `9.99`, written as the
   typed literal `NUMERIC '9.99'`
+- `JSONB` is in the type list of *Create a Table* and *Add a Column*. A `JSONB` default such as
+  `{"tags": []}` must be valid JSON, and it is written as the typed literal `JSONB '…'`
+- *Add Index* on a `JSONB` column creates a GIN index (`CREATE INDEX … USING GIN (col)`). A GIN index
+  has one column and cannot be unique. The schema tree marks a GIN index with `(GIN)`
 - *Add a Column* runs `ALTER TABLE … ADD COLUMN` with a type, a default, a comment and `NOT NULL`.
   Existing rows get a constant default; a function default such as `now()` applies to new rows only.
   So a `NOT NULL` column needs a constant default. The dialog does not offer `nextval()`, because the
@@ -453,6 +461,9 @@ pages through the table, and it sorts and filters on the server (see [Results gr
   required* hint on tables without one
 - A `NUMERIC` value is written as `NUMERIC '…'`, in `SET` and in the primary-key `WHERE`. A bare
   decimal is a `FLOAT64` literal, and a `NUMERIC` compares with a float as a double
+- A `JSONB` field opens with the document indented, in a multi-line field. The text must be one JSON
+  document, and it is written as `JSONB '…'` on one line. The text `null` is a JSON `null` document;
+  the **NULL** toggle is SQL `NULL`
 - The grid re-runs its query after a successful edit or delete
 
 ### Export
@@ -468,6 +479,31 @@ query runs again. A paged result exports only its loaded rows: click **Fetch mor
 more. The menu tells when the filter or the paging limits the rows. The file is called
 `result-{UTC time}.csv`, or `{table}-{UTC time}.csv` in a data tab. In JSON, a second column with the
 same name (`SELECT a.id, b.id`) gets the key `id_2`, so no value is lost.
+
+### Administration
+
+**Administration** in the header opens the node views. Each view answers for the node behind the
+console's endpoint only. The tabs are **Node**, **Engine stats**, **Statements**, **Index usage**,
+**Variables** and **Backups**. With authentication enabled, every tab except **Node** needs a superuser.
+
+The **Node** tab shows the disk, CPU and memory of the node, from the server's node stats call
+(`GET /v1/admin/stats`, gRPC `GetNodeStats`):
+
+- **Disks:** each volume that the engine writes to, with the used share, the available space, the
+  engine's own files and the write watermark (`min_free_disk_bytes`). *Below watermark* means that the
+  node refuses writes (`CADB0536`). *Low* means less than 4× the watermark. The bar turns orange at
+  90% used
+- **CPU:** the server process's share of all processors over the last minute, the processor count and
+  the host's load averages
+- **Memory:** the host memory in use (the cgroup limit when one applies), the process working set and
+  the managed heap. *No limit* means that no heap limit is in force
+- The values that the node could not read, with the reason
+- **Take reading** reads again, and **Auto every 5s** reads every 5 seconds. With more than one
+  endpoint, a **Node** list selects the node to read
+
+An account that is not a superuser can read the **Node** tab when it holds the `MONITOR` privilege
+(`GRANT MONITOR ON *.* TO user`). The console checks this at connect time. Such an account sees the
+**Node** tab only. Connect again after a grant.
 
 ### Authentication
 
@@ -487,6 +523,8 @@ src/CamusDB.WebConsole/
   Components/Console/   # Schema tree, editor, results grid, query plan flow, dialogs (configure,
                         # create table, add index, add foreign key, edit record, export, confirm,
                         # query history)
+  Components/Admin/     # Administration tabs: node stats, engine stats, statement stats, index usage,
+                        # variables, backups
   Components/Layout/    # Main shell + theme
   Services/             # Session, schema, query execution, query plan parser, export, preferences,
                         # SQL builder, script splitter, query history, schema completion

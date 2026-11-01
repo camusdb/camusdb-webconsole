@@ -26,6 +26,7 @@
     --camus-kind-filter: #ffb74d;
     --camus-kind-aggregate: #4dd0e1;
     --camus-kind-sort: #f48fb1;
+    --camus-kind-window: #ce93d8;
     --camus-kind-limit: #aed581;
     --camus-kind-exchange: #ff8a65;
     --camus-kind-setop: #ffd54f;
@@ -58,6 +59,7 @@
     --camus-kind-filter: #b26200;
     --camus-kind-aggregate: #00838f;
     --camus-kind-sort: #c2185b;
+    --camus-kind-window: #8e24aa;
     --camus-kind-limit: #4f7f1f;
     --camus-kind-exchange: #d84315;
     --camus-kind-setop: #8a6d00;
@@ -849,6 +851,7 @@ html, body {
 .plan-step.kind-filter { --plan-kind: var(--camus-kind-filter); }
 .plan-step.kind-aggregate { --plan-kind: var(--camus-kind-aggregate); }
 .plan-step.kind-sort { --plan-kind: var(--camus-kind-sort); }
+.plan-step.kind-window { --plan-kind: var(--camus-kind-window); }
 .plan-step.kind-limit { --plan-kind: var(--camus-kind-limit); }
 .plan-step.kind-project { --plan-kind: var(--camus-green); }
 .plan-step.kind-exchange { --plan-kind: var(--camus-kind-exchange); }
@@ -1378,6 +1381,11 @@ html, body {
     font-size: 0.75rem;
 }
 
+.edit-record-json textarea {
+    font-family: var(--camus-mono);
+    font-size: 0.8125rem;
+}
+
 .edit-record-pk td {
     opacity: 0.85;
 }
@@ -1397,6 +1405,20 @@ html, body {
 
 .cell-bool {
     color: var(--camus-pink);
+}
+
+.cell-json {
+    color: var(--camus-warn);
+}
+
+/* A JSONB document stays on one line, as every cell does, but stops at 60 characters so that one
+   large document does not make its column the width of the page. The title shows the full text. */
+.cell-json-text {
+    display: inline-block;
+    max-width: 60ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    vertical-align: top;
 }
 
 .console-footer {
@@ -1595,6 +1617,123 @@ html, body {
 .admin-denied {
     padding: 16px;
     max-width: 720px;
+}
+
+/* Node tab: the disk, CPU and memory of one node. */
+.node-stats-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.node-section-title {
+    margin: 0 0 8px;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--camus-muted);
+}
+
+/* The disks table sizes to its rows here, not to the rest of the panel. */
+.node-table-wrap {
+    flex: none;
+    max-height: none;
+    border: 1px solid var(--camus-border);
+}
+
+.node-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr));
+    gap: 16px;
+}
+
+.node-card {
+    border: 1px solid var(--camus-border);
+    background: var(--camus-surface);
+    padding: 12px 14px;
+}
+
+.node-kv {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 8px 16px;
+    margin: 0;
+    font-size: 0.8125rem;
+}
+
+.node-kv dt {
+    color: var(--camus-muted);
+}
+
+.node-kv dd {
+    margin: 0;
+    font-family: var(--camus-mono);
+}
+
+.node-hint {
+    display: block;
+    margin-top: 2px;
+    font-family: var(--camus-font);
+    font-size: 0.75rem;
+    color: var(--camus-muted);
+}
+
+.node-sep {
+    margin: 0 4px;
+    color: var(--camus-muted);
+}
+
+/* The text goes below the bar when the card is too narrow for both on one line. */
+.node-meter {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 8px;
+}
+
+.node-meter-track {
+    display: inline-block;
+    width: 120px;
+    height: 8px;
+    background: var(--camus-surface-2);
+    border: 1px solid var(--camus-border);
+    overflow: hidden;
+}
+
+.node-meter-fill {
+    display: block;
+    height: 100%;
+}
+
+.node-meter-ok { background: var(--camus-accent); }
+.node-meter-warn { background: var(--camus-warn); }
+.node-meter-danger { background: var(--camus-danger); }
+
+.node-meter-text {
+    white-space: nowrap;
+    font-family: var(--camus-mono);
+    font-size: 0.8125rem;
+}
+
+.node-state-ok { color: var(--camus-green); }
+.node-state-warn { color: var(--camus-warn); }
+.node-state-danger { color: var(--camus-danger); font-weight: 600; }
+
+.node-errors {
+    margin: 0;
+    padding-left: 18px;
+    font-size: 0.8125rem;
+}
+
+.node-errors code {
+    font-family: var(--camus-mono);
+    color: var(--camus-text);
+    margin-right: 6px;
 }
 
 .admin-note {

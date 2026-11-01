@@ -223,9 +223,9 @@
                                                                 <span style="width:20px;display:inline-block;"></span>
                                                                 <MudIcon Icon="@Icons.Material.Filled.Key" Size="Size.Small" />
                                                                 <span class="schema-node-label">@idx.Name</span>
-                                                                @if (!string.IsNullOrEmpty(idx.Columns))
+                                                                @if (!string.IsNullOrEmpty(idx.Detail))
                                                                 {
-                                                                    <span class="schema-node-detail">@idx.Columns</span>
+                                                                    <span class="schema-node-detail">@idx.Detail</span>
                                                                 }
                                                             </div>
                                                         </ActivatorContent>

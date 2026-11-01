@@ -28,18 +28,22 @@
             Not connected. Open Configure from the query console and connect first.
         </div>
     }
-    else if (Session.AdminAccessProbed && !Session.HasAdminAccess)
+    else if (Session.AdminAccessProbed && !Session.HasAdminAccess && !Session.HasMonitorAccess)
     {
         <div class="admin-denied">
             <MudAlert Severity="Severity.Warning" Dense="true">
                 <MudText Typo="Typo.body2">
                     <b>@(string.IsNullOrEmpty(Session.User) ? "This session" : Session.User)</b> is not a
-                    superuser, and every surface here requires one when the server has authentication
-                    enabled. Engine metrics describe Raft topology and whole-node workload, statement
+                    superuser and does not hold MONITOR. With authentication enabled, every surface here except
+                    the Node tab requires a superuser. Engine metrics describe Raft topology and whole-node workload, statement
                     statistics hold the SQL text of every user, index usage counts the whole node's
                     workload, the variable list describes the node's whole security posture, and a
                     backup covers every database on the node — none of it is scoped down by a
-                    per-database grant, so there is no privilege to ask for short of a superuser account.
+                    per-database grant, so no grant short of a superuser account opens them.
+                </MudText>
+                <MudText Typo="Typo.body2" Class="mt-2">
+                    The Node tab (disk, CPU and memory of the node) opens with
+                    <code>GRANT MONITOR ON *.* TO user</code>. Connect again after the grant.
                 </MudText>
             </MudAlert>
         </div>
@@ -47,44 +51,60 @@
     else
     {
         <div class="admin-tabbar" role="tablist">
-            @foreach (AdminTab tab in Tabs)
+            @foreach (AdminTab tab in VisibleTabs)
             {
                 <button type="button"
                         role="tab"
-                        class="admin-tab @(_tab == tab ? "active" : null)"
-                        aria-selected="@(_tab == tab ? "true" : "false")"
+                        class="admin-tab @(CurrentTab == tab ? "active" : null)"
+                        aria-selected="@(CurrentTab == tab ? "true" : "false")"
                         @onclick="() => SelectTab(tab)">
                     @Title(tab)
                 </button>
             }
         </div>
 
-        @* Both panels stay mounted: switching tabs must not throw away the engine-stats baseline. *@
-        <div class="admin-pane @(_tab == AdminTab.EngineStats ? null : "admin-pane-hidden")">
-            <EngineStatsPanel />
+        @if (MonitorOnly)
+        {
+            <MudAlert Severity="Severity.Info" Dense="true" Class="admin-alert">
+                This account is not a superuser. It holds the MONITOR privilege, which opens the Node tab
+                only.
+            </MudAlert>
+        }
+
+        @* The node stats call is cheap (the server reads cached values), so the panel stays mounted. *@
+        <div class="admin-pane @(CurrentTab == AdminTab.Node ? null : "admin-pane-hidden")">
+            <NodeStatsPanel />
         </div>
-        <div class="admin-pane @(_tab == AdminTab.Variables ? null : "admin-pane-hidden")">
-            <VariablesPanel />
-        </div>
+
+        @if (!MonitorOnly)
+        {
+            @* Both panels stay mounted: switching tabs must not throw away the engine-stats baseline. *@
+            <div class="admin-pane @(CurrentTab == AdminTab.EngineStats ? null : "admin-pane-hidden")">
+                <EngineStatsPanel />
+            </div>
+            <div class="admin-pane @(CurrentTab == AdminTab.Variables ? null : "admin-pane-hidden")">
+                <VariablesPanel />
+            </div>
+        }
         @* Mounted lazily, like Backups: each one runs a statement when it opens. Once open, they stay
            mounted, so switching tabs keeps their baselines. *@
-        @if (_statementsOpened)
+        @if (_statementsOpened && !MonitorOnly)
         {
-            <div class="admin-pane @(_tab == AdminTab.Statements ? null : "admin-pane-hidden")">
+            <div class="admin-pane @(CurrentTab == AdminTab.Statements ? null : "admin-pane-hidden")">
                 <StatementStatsPanel />
             </div>
         }
-        @if (_indexUsageOpened)
+        @if (_indexUsageOpened && !MonitorOnly)
         {
-            <div class="admin-pane @(_tab == AdminTab.IndexUsage ? null : "admin-pane-hidden")">
+            <div class="admin-pane @(CurrentTab == AdminTab.IndexUsage ? null : "admin-pane-hidden")">
                 <IndexUsagePanel />
             </div>
         }
         @* Mounted lazily: listing the catalog is a real HTTP call, and it must not fire for someone
            who never opens the tab. *@
-        @if (_backupsOpened)
+        @if (_backupsOpened && !MonitorOnly)
         {
-            <div class="admin-pane @(_tab == AdminTab.Backups ? null : "admin-pane-hidden")">
+            <div class="admin-pane @(CurrentTab == AdminTab.Backups ? null : "admin-pane-hidden")">
                 <BackupsPanel />
             </div>
         }
@@ -94,6 +114,7 @@
 @code {
     private enum AdminTab
     {
+        Node,
         EngineStats,
         Statements,
         IndexUsage,
@@ -102,9 +123,22 @@
     }
 
     private static readonly AdminTab[] Tabs =
-        [AdminTab.EngineStats, AdminTab.Statements, AdminTab.IndexUsage, AdminTab.Variables, AdminTab.Backups];
+        [AdminTab.Node, AdminTab.EngineStats, AdminTab.Statements, AdminTab.IndexUsage, AdminTab.Variables, AdminTab.Backups];
 
-    private AdminTab _tab = AdminTab.EngineStats;
+    private static readonly AdminTab[] MonitorTabs = [AdminTab.Node];
+
+    private AdminTab _tab = AdminTab.Node;
+
+    /// <summary>
+    /// True when the session reads the node stats through the MONITOR privilege and is not a
+    /// superuser. Every other tab runs a statement that only a superuser may run.
+    /// </summary>
+    private bool MonitorOnly => Session.AdminAccessProbed && !Session.HasAdminAccess && Session.HasMonitorAccess;
+
+    private AdminTab[] VisibleTabs => MonitorOnly ? MonitorTabs : Tabs;
+
+    /// <summary>The selected tab, or Node when the selected tab is not open to this session.</summary>
+    private AdminTab CurrentTab => VisibleTabs.Contains(_tab) ? _tab : AdminTab.Node;
     private bool _statementsOpened;
     private bool _indexUsageOpened;
     private bool _backupsOpened;
@@ -127,6 +161,7 @@
 
     private static string Title(AdminTab tab) => tab switch
     {
+        AdminTab.Node => "Node",
         AdminTab.EngineStats => "Engine stats",
         AdminTab.Statements => "Statements",
         AdminTab.IndexUsage => "Index usage",

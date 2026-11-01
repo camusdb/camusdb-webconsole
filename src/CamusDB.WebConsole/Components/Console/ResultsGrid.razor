@@ -198,7 +198,15 @@ else
                             @for (int i = 0; i < Result.Columns.Count; i++)
                             {
                                 object? value = i < row.Length ? row[i] : null;
-                                <td class="@CellClass(Result.Columns[i], value)">@FormatCell(value)</td>
+                                @if (value is JsonbText document)
+                                {
+                                    @* A document can be long. The cell shows its start, and the tooltip shows all of it. *@
+                                    <td class="cell-json"><span class="cell-json-text" title="@document.Text">@document.Text</span></td>
+                                }
+                                else
+                                {
+                                    <td class="@CellClass(Result.Columns[i], value)">@FormatCell(value)</td>
+                                }
                             }
                             @if (ShowRowActions)
                             {
@@ -738,6 +746,9 @@ else
 
         if (value is bool)
             return "cell-bool";
+
+        if (value is JsonbText)
+            return "cell-json";
 
         if (value is sbyte or byte or short or ushort or int or uint or long or ulong or float or double or decimal or NumericText)
             return "cell-number";

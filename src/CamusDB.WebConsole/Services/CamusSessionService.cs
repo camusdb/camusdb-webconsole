@@ -250,8 +250,19 @@ public sealed class CamusSessionService : IAsyncDisposable
     /// </summary>
     public bool? IsSuperuser { get; private set; }
 
-    /// <summary>True when the administration views are worth offering — see <see cref="AdminAccessProbed"/>.</summary>
-    public bool ShowAdministration => IsConnected && (HasAdminAccess || !AdminAccessProbed);
+    /// <summary>
+    /// True when this session may read the node stats (disk, CPU and memory). A superuser may, and so
+    /// may every caller when authentication is off. An account that is not a superuser may when it
+    /// holds the MONITOR privilege (<c>GRANT MONITOR ON *.* TO user</c>), which no SQL function
+    /// reports, so the connect makes one node stats call to find out.
+    /// </summary>
+    public bool HasMonitorAccess { get; private set; }
+
+    /// <summary>
+    /// True when the administration views are worth offering — see <see cref="AdminAccessProbed"/>.
+    /// A MONITOR account gets the page with the Node tab only.
+    /// </summary>
+    public bool ShowAdministration => IsConnected && (HasAdminAccess || HasMonitorAccess || !AdminAccessProbed);
 
     public string? LastError => _lastError;
 
@@ -380,6 +391,7 @@ public sealed class CamusSessionService : IAsyncDisposable
             await ResolveExistingDatabaseAsync(cancellationToken).ConfigureAwait(false);
 
             await ProbeAdminAccessAsync(cancellationToken).ConfigureAwait(false);
+            await ProbeMonitorAccessAsync(cancellationToken).ConfigureAwait(false);
         }
         catch (CamusException ex)
         {
@@ -594,6 +606,7 @@ public sealed class CamusSessionService : IAsyncDisposable
     private async Task ProbeAdminAccessAsync(CancellationToken cancellationToken)
     {
         HasAdminAccess = false;
+        HasMonitorAccess = false;
         AdminAccessProbed = false;
         IsSuperuser = null;
 
@@ -631,6 +644,37 @@ public sealed class CamusSessionService : IAsyncDisposable
         }
 
         await ProbeAdminAccessLegacyAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Decides whether this session may read the node stats. Runs after
+    /// <see cref="ProbeAdminAccessAsync"/>, and never throws.
+    /// </summary>
+    private async Task ProbeMonitorAccessAsync(CancellationToken cancellationToken)
+    {
+        if (HasAdminAccess)
+        {
+            HasMonitorAccess = true;
+            return;
+        }
+
+        // No verdict on the superuser question: the views are offered anyway (see
+        // ShowAdministration), and the Node tab reports what the server says.
+        if (_connection is null || !AdminAccessProbed)
+            return;
+
+        try
+        {
+            await _connection.GetNodeStatsAsync(cancellationToken).ConfigureAwait(false);
+            HasMonitorAccess = true;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // CADB0517 is the definitive no. Any other failure (a server older than the call, a
+            // transport fault) also leaves the tab hidden, because this account is not a superuser
+            // and no other privilege opens anything on the page.
+            HasMonitorAccess = false;
+        }
     }
 
     private async Task ProbeAdminAccessLegacyAsync(CancellationToken cancellationToken)
@@ -905,6 +949,7 @@ public sealed class CamusSessionService : IAsyncDisposable
 
             // The verdict belongs to the connection that was probed, not to the console.
             HasAdminAccess = false;
+            HasMonitorAccess = false;
             AdminAccessProbed = false;
             IsSuperuser = null;
         }

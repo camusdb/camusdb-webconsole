@@ -13,7 +13,10 @@ namespace CamusDB.WebConsole.Services;
 /// views describe the node behind <see cref="CamusSessionService.Endpoint"/> and no other. Comparing a
 /// cluster means pointing the console at each node in turn.</para>
 ///
-/// <para>All of them require a superuser when the server has authentication enabled — no per-database grant
+/// <para>It also reads the node stats call (<see cref="LoadNodeStatsAsync"/>), which is not a statement
+/// and which an account with the MONITOR privilege may also make.</para>
+///
+/// <para>All the statements require a superuser when the server has authentication enabled — no per-database grant
 /// scopes down Raft topology or a node's whole security posture — and a non-superuser gets
 /// <see cref="CamusSessionService.PrivilegeDeniedCode"/>.</para>
 /// </summary>
@@ -158,6 +161,27 @@ public sealed class AdminService
             cancellationToken).ConfigureAwait(false);
 
         return new IndexUsageSnapshot { TakenAtUtc = DateTime.UtcNow, Database = database, Rows = rows };
+    }
+
+    /// <summary>
+    /// The endpoints of the session's connection. Each node answers the node stats call for itself
+    /// only, so the Node tab asks one of these at a time.
+    /// </summary>
+    public IReadOnlyList<string> NodeEndpoints => _session.GetConnection().Endpoints;
+
+    /// <summary>
+    /// The disk, CPU and memory of the node at <paramref name="endpoint"/>, or of the next node in the
+    /// connection's rotation when it is null. This is not a SQL statement: it is the server's
+    /// <c>GET /v1/admin/stats</c> call (gRPC <c>GetNodeStats</c>). A superuser may make it, and so may
+    /// an account with the MONITOR privilege.
+    /// </summary>
+    public async Task<CamusNodeStats> LoadNodeStatsAsync(string? endpoint, CancellationToken cancellationToken = default)
+    {
+        CamusConnection connection = _session.GetConnection();
+
+        return string.IsNullOrEmpty(endpoint)
+            ? await connection.GetNodeStatsAsync(cancellationToken).ConfigureAwait(false)
+            : await connection.GetNodeStatsAsync(endpoint, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>

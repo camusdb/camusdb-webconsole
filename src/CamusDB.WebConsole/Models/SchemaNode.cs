@@ -79,6 +79,17 @@ public sealed class IndexSchemaInfo
     public string? Columns { get; init; }
 
     public bool Unique { get; init; }
+
+    /// <summary>
+    /// The Index_type of SHOW INDEXES: <c>GIN</c> for an index on a JSONB column, else the ordered
+    /// index type, or null when the server does not send the column.
+    /// </summary>
+    public string? Method { get; init; }
+
+    public bool IsGin => string.Equals(Method, "GIN", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>The text after the name in the schema tree: the columns, and GIN for a GIN index.</summary>
+    public string? Detail => IsGin ? $"{Columns} (GIN)".TrimStart() : Columns;
 }
 
 /// <summary>

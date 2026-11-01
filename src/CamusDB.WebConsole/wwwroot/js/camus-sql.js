@@ -43,6 +43,20 @@
  * CASCADE, DEFERRED and IMMEDIATE are plain identifiers that the parse action checks. Do not promote
  * one to a keyword here.
  *
+ * OVER is reserved, for window functions. The other window words, PARTITION, ROWS, RANGE, UNBOUNDED,
+ * PRECEDING, FOLLOWING, CURRENT and ROW, are plain identifiers, so they are colored only inside the
+ * window phrases: PARTITION BY, ROWS BETWEEN, UNBOUNDED PRECEDING, CURRENT ROW, 2 PRECEDING. GROUPS and
+ * EXCLUDE parse only to be refused, so they stay plain.
+ *
+ * JSONB and its alias JSON are not reserved either: a table or a column can be named json. So the two
+ * words are colored as a type only where a type goes: after a column name in a column definition,
+ * after '::', after AS in a CAST, and before a string in a typed literal (JSONB '{}'). The index forms
+ * USING GIN, CREATE INVERTED INDEX and the operator classes jsonb_ops and jsonb_path_ops are plain
+ * identifiers that the parse action checks, so they are phrases too.
+ *
+ * The jsonb operators are ->, ->>, #>, #>>, #-, @>, <@, ?, ?| and ?&. '<@' is the operator only when
+ * no name character follows it: `x<@p` is still `x < @p`, as in the lexer.
+ *
  * Registered as its own language id rather than by overriding "sql": Monaco loads a basic language's
  * tokenizer lazily, on first use, so replacing the "sql" provider at page load races with that import
  * and can be silently overwritten.
@@ -79,13 +93,13 @@
             'HAVING', 'IDENTIFIED', 'IF', 'INCLUDE', 'INDEX', 'INDEXES',
             'INITIALLY', 'INNER', 'INSERT', 'INTERSECT', 'INTO', 'JOIN',
             'KEY', 'LEFT', 'LIMIT', 'MATERIALIZED', 'NULL', 'OFFSET',
-            'ON', 'ORDER', 'ORPHAN', 'OUTER', 'PRIMARY', 'PRIVILEGES',
-            'REFERENCES', 'REFRESH', 'RELINK', 'RENAME', 'RESET', 'RETURNING',
-            'REVOKE', 'RIGHT', 'ROLLBACK', 'SELECT', 'SEQUENCE', 'SEQUENCES',
-            'SET', 'SHOW', 'START', 'TABLE', 'TABLES', 'THEN',
-            'TO', 'TRANSACTION', 'TRUE', 'TRUNCATE', 'UNION', 'UNIQUE',
-            'UPDATE', 'USER', 'VALUES', 'VIEW', 'VIEWS', 'WHEN',
-            'WHERE', 'WITH', 'WITHOUT',
+            'ON', 'ORDER', 'ORPHAN', 'OUTER', 'OVER', 'PRIMARY',
+            'PRIVILEGES', 'REFERENCES', 'REFRESH', 'RELINK', 'RENAME', 'RESET',
+            'RETURNING', 'REVOKE', 'RIGHT', 'ROLLBACK', 'SELECT', 'SEQUENCE',
+            'SEQUENCES', 'SET', 'SHOW', 'START', 'TABLE', 'TABLES',
+            'THEN', 'TO', 'TRANSACTION', 'TRUE', 'TRUNCATE', 'UNION',
+            'UNIQUE', 'UPDATE', 'USER', 'VALUES', 'VIEW', 'VIEWS',
+            'WHEN', 'WHERE', 'WITH', 'WITHOUT',
         ],
 
         operators: [
@@ -121,33 +135,50 @@
         // registered, and the grammar also accepts its EXTRACT(field FROM x) form. GENERATE_SERIES is
         // the one table function: it is called in FROM (TableFunctionRegistry).
         //
+        // ROW_NUMBER, RANK, DENSE_RANK, PERCENT_RANK, CUME_DIST, NTILE, LAG, LEAD, FIRST_VALUE,
+        // LAST_VALUE and NTH_VALUE are the window functions. They are valid only with OVER.
+        //
+        // The JSONB_* and JSON_* document functions come from JsonbScalarFunctions, JSONB_AGG and
+        // JSONB_OBJECT_AGG from JsonbAggregates, and JSONB_EACH, JSONB_OBJECT_KEYS and
+        // JSONB_ARRAY_ELEMENTS from JsonbTableFunctions (called in FROM). A JSON_* spelling is listed
+        // only where the server registers it. JSON_VALID, JSON_TYPE, JSON_EXTRACT, JSON_VALUE,
+        // JSON_CONTAINS and JSON_ARRAY_LENGTH are the older MySQL-style functions on text.
+        //
         // COUNT_DISTINCT, GROUP_CONCAT, STRING_AGG and ARRAY_AGG are absent on purpose. The engine names
         // them only to reject them (AggregateFunctionCatalog.ReservedOnly). No aggregator implements them.
         builtinFunctions: [
             'ABS', 'ARRAY_CONTAINS', 'ARRAY_LENGTH', 'AVG', 'BIT_COUNT', 'BIT_LENGTH',
             'CARDINALITY', 'CEIL', 'CEILING', 'CLOCK_TIMESTAMP', 'COALESCE', 'CONCAT',
             'CONTAINS', 'CONVERT_FROM', 'CONVERT_TO', 'COSINE_DISTANCE', 'COUNT', 'CRC32',
-            'CURRENT_DATABASE', 'CURRENT_DATE', 'CURRENT_ROLE', 'CURRENT_TIMESTAMP', 'CURRENT_USER', 'CURRVAL',
-            'DATE_ADD', 'DATE_DIFF', 'DATE_FORMAT', 'DATE_PART', 'DATE_TRUNC', 'DAY',
-            'DAYNAME', 'DAYOFMONTH', 'DAYOFWEEK', 'DAYOFYEAR', 'DECODE', 'DIGEST',
-            'ENCODE', 'ENDS_WITH', 'EXTRACT', 'FLOOR', 'FROM_BASE64', 'FROM_UNIXTIME',
-            'GENERATE_SERIES', 'GEN_ID', 'GEN_RANDOM_BYTES', 'GEN_UUID_V4', 'GEN_UUID_V7', 'GET_BIT',
-            'GET_BYTE', 'HEX', 'HMAC', 'HOUR', 'IFNULL', 'INNER_PRODUCT',
-            'IS_SUPERUSER', 'JSON_ARRAY_LENGTH', 'JSON_CONTAINS', 'JSON_EXTRACT', 'JSON_TYPE', 'JSON_VALID',
-            'JSON_VALUE', 'L2_DISTANCE', 'LASTVAL', 'LAST_DAY', 'LENGTH', 'LOWER',
-            'LTRIM', 'MAKEDATE', 'MAKE_DATE', 'MAKE_TIMESTAMP', 'MAX', 'MD5',
-            'MIN', 'MINUTE', 'MOD', 'MONTH', 'MONTHNAME', 'NEXTVAL',
-            'NOW', 'NULLIF', 'NVL', 'OCTET_LENGTH', 'POSITION', 'POW',
-            'POWER', 'QUARTER', 'RANDOM', 'REGEXP_COUNT', 'REGEXP_INSTR', 'REGEXP_LIKE',
-            'REGEXP_MATCH', 'REGEXP_MATCHES', 'REGEXP_REPLACE', 'REGEXP_SPLIT_TO_ARRAY', 'REGEXP_SPLIT_TO_TABLE', 'REGEXP_SUBSTR',
-            'REPLACE', 'ROUND', 'RTRIM', 'SECOND', 'SETVAL', 'SET_BIT',
-            'SET_BYTE', 'SHA1', 'SHA256', 'SHA512', 'SIGN', 'SQRT',
-            'STARTS_WITH', 'STATEMENT_TIMESTAMP', 'STRPOS', 'STR_ID', 'STR_TO_DATE', 'SUBSTRING',
-            'SUM', 'SYSDATE', 'TO_BASE64', 'TO_BOOL', 'TO_BYTES', 'TO_CHAR',
-            'TO_DATE', 'TO_DATETIME', 'TO_FLOAT32', 'TO_FLOAT64', 'TO_ID', 'TO_INT64',
-            'TO_STRING', 'TO_TIMESTAMP', 'TRANSACTION_TIMESTAMP', 'TRIM', 'TRUNC', 'UNHEX',
-            'UNIX_TIMESTAMP', 'UNIX_TIMESTAMP_MS', 'UPPER', 'VECTOR_DIMS', 'WEEK', 'WEEKDAY',
-            'YEAR',
+            'CUME_DIST', 'CURRENT_DATABASE', 'CURRENT_DATE', 'CURRENT_ROLE', 'CURRENT_TIMESTAMP', 'CURRENT_USER',
+            'CURRVAL', 'DATE_ADD', 'DATE_DIFF', 'DATE_FORMAT', 'DATE_PART', 'DATE_TRUNC',
+            'DAY', 'DAYNAME', 'DAYOFMONTH', 'DAYOFWEEK', 'DAYOFYEAR', 'DECODE',
+            'DENSE_RANK', 'DIGEST', 'ENCODE', 'ENDS_WITH', 'EXTRACT', 'FIRST_VALUE',
+            'FLOOR', 'FROM_BASE64', 'FROM_UNIXTIME', 'GENERATE_SERIES', 'GEN_ID', 'GEN_RANDOM_BYTES',
+            'GEN_UUID_V4', 'GEN_UUID_V7', 'GET_BIT', 'GET_BYTE', 'HEX', 'HMAC',
+            'HOUR', 'IFNULL', 'INNER_PRODUCT', 'IS_SUPERUSER', 'JSONB_AGG', 'JSONB_ARRAY_ELEMENTS',
+            'JSONB_ARRAY_ELEMENTS_TEXT', 'JSONB_ARRAY_LENGTH', 'JSONB_BUILD_ARRAY', 'JSONB_BUILD_OBJECT', 'JSONB_CONTAINED', 'JSONB_CONTAINS',
+            'JSONB_DELETE_PATH', 'JSONB_EACH', 'JSONB_EACH_TEXT', 'JSONB_EXISTS', 'JSONB_EXISTS_ALL', 'JSONB_EXISTS_ANY',
+            'JSONB_EXTRACT_PATH', 'JSONB_EXTRACT_PATH_TEXT', 'JSONB_INSERT', 'JSONB_OBJECT', 'JSONB_OBJECT_AGG', 'JSONB_OBJECT_KEYS',
+            'JSONB_PRETTY', 'JSONB_SET', 'JSONB_SET_LAX', 'JSONB_STRIP_NULLS', 'JSONB_TYPEOF', 'JSON_AGG',
+            'JSON_ARRAY_ELEMENTS', 'JSON_ARRAY_ELEMENTS_TEXT', 'JSON_ARRAY_LENGTH', 'JSON_BUILD_ARRAY', 'JSON_BUILD_OBJECT', 'JSON_CONTAINS',
+            'JSON_EACH', 'JSON_EACH_TEXT', 'JSON_EXTRACT', 'JSON_EXTRACT_PATH', 'JSON_EXTRACT_PATH_TEXT', 'JSON_OBJECT',
+            'JSON_OBJECT_AGG', 'JSON_OBJECT_KEYS', 'JSON_STRIP_NULLS', 'JSON_TYPE', 'JSON_TYPEOF', 'JSON_VALID',
+            'JSON_VALUE', 'L2_DISTANCE', 'LAG', 'LASTVAL', 'LAST_DAY', 'LAST_VALUE',
+            'LEAD', 'LENGTH', 'LOWER', 'LTRIM', 'MAKEDATE', 'MAKE_DATE',
+            'MAKE_TIMESTAMP', 'MAX', 'MD5', 'MIN', 'MINUTE', 'MOD',
+            'MONTH', 'MONTHNAME', 'NEXTVAL', 'NOW', 'NTH_VALUE', 'NTILE',
+            'NULLIF', 'NVL', 'OCTET_LENGTH', 'PERCENT_RANK', 'POSITION', 'POW',
+            'POWER', 'QUARTER', 'RANDOM', 'RANK', 'REGEXP_COUNT', 'REGEXP_INSTR',
+            'REGEXP_LIKE', 'REGEXP_MATCH', 'REGEXP_MATCHES', 'REGEXP_REPLACE', 'REGEXP_SPLIT_TO_ARRAY', 'REGEXP_SPLIT_TO_TABLE',
+            'REGEXP_SUBSTR', 'REPLACE', 'ROUND', 'ROW_NUMBER', 'RTRIM', 'SECOND',
+            'SETVAL', 'SET_BIT', 'SET_BYTE', 'SHA1', 'SHA256', 'SHA512',
+            'SIGN', 'SQRT', 'STARTS_WITH', 'STATEMENT_TIMESTAMP', 'STRPOS', 'STR_ID',
+            'STR_TO_DATE', 'SUBSTRING', 'SUM', 'SYSDATE', 'TO_BASE64', 'TO_BOOL',
+            'TO_BYTES', 'TO_CHAR', 'TO_DATE', 'TO_DATETIME', 'TO_FLOAT32', 'TO_FLOAT64',
+            'TO_ID', 'TO_INT64', 'TO_JSON', 'TO_JSONB', 'TO_STRING', 'TO_TIMESTAMP',
+            'TRANSACTION_TIMESTAMP', 'TRIM', 'TRUNC', 'UNHEX', 'UNIX_TIMESTAMP', 'UNIX_TIMESTAMP_MS',
+            'UPPER', 'VECTOR_DIMS', 'WEEK', 'WEEKDAY', 'YEAR',
         ],
 
         // Quantifiers of a comparison: `x > ALL (SELECT ...)`. See the header comment.
@@ -199,6 +230,10 @@
                         '@default': 'identifier',
                     },
                 }],
+
+                // The jsonb operators that start with '@' or '?'. The rest (->, ->>, #>, #>>, #-) are
+                // made of characters the rule below already colors.
+                [/@>|<@(?![A-Za-z0-9_])|\?[|&]?/, 'operator'],
 
                 // Includes CamusDB's POSIX regex operators (~  ~*  !~  !~*), concatenation (||) and the
                 // bitwise operators (&  |  #  ~  <<  >>). '#' is XOR, never a comment. There is no '^'.
@@ -332,6 +367,29 @@
                 // must not be a word the tokenizer colors, so `SELECT serial, x` stays plain.
                 [/(?!@coloredWord)([A-Za-z_]\w*)(\s+)(SERIAL|BIGSERIAL)\b/i, ['identifier', 'white', 'type']],
 
+                // Window clauses: OVER (PARTITION BY g ORDER BY d ROWS BETWEEN 2 PRECEDING AND CURRENT ROW).
+                [/PARTITION\s+BY\b/i, 'keyword'],
+                // ROWS and RANGE need a frame bound after them, so `WHERE range BETWEEN 1 AND 5` stays a
+                // column compared with BETWEEN.
+                [/(?:ROWS|RANGE)(?=\s+(?:BETWEEN\s+)?(?:UNBOUNDED\s|CURRENT\s+ROW\b|(?:\d+|@[A-Za-z_]\w*)\s+(?:PRECEDING|FOLLOWING)\b))/i, 'keyword'],
+                [/UNBOUNDED\s+(?:PRECEDING|FOLLOWING)\b/i, 'keyword'],
+                [/CURRENT\s+ROW\b/i, 'keyword'],
+                [/(\d+)(\s+)(PRECEDING|FOLLOWING)\b/i, ['number', 'white', 'keyword']],
+                [/(@[A-Za-z_]\w*)(\s+)(PRECEDING|FOLLOWING)\b/i, ['variable.parameter', 'white', 'keyword']],
+
+                // JSONB and JSON, only where a type goes. See the header comment.
+                [/(::)(\s*)(JSONB?)\b/i, ['operator', 'white', 'type']],
+                [/(AS)(\s+)(JSONB?)(?=\s*\))/i, ['keyword', 'white', 'type']],
+                [/JSONB?(?=\s*')/i, 'type'],
+                [/(?!@coloredWord)([A-Za-z_]\w*)(\s+)(JSONB?)(?=\s*(?:[,)]|NOT\b|NULL\b|DEFAULT\b|COMMENT\b|STORAGE\b|$))/i,
+                    ['identifier', 'white', 'type']],
+
+                // GIN indexes: CREATE INDEX i ON t USING GIN (doc jsonb_path_ops), CREATE INVERTED
+                // INDEX, and INVERTED INDEX i (doc) inside CREATE TABLE.
+                [/USING\s+(?:GIN|BTREE)\b/i, 'keyword'],
+                [/INVERTED(?=\s+INDEX\b)/i, 'keyword'],
+                [/JSONB_(?:PATH_)?OPS\b/i, 'keyword'],
+
                 // Foreign key clauses. NO ACTION is a lexer token; see '@scopes'.
                 [/ON\s+(?:DELETE|UPDATE)\s+(?:CASCADE|RESTRICT)\b/i, 'keyword'],
                 [/MATCH\s+(?:SIMPLE|FULL|PARTIAL)\b/i, 'keyword'],
@@ -406,6 +464,9 @@
 
                 // Backtick-quoted identifiers: `games`
                 { token: 'identifier.escaped.sql', foreground: 'FA8072' },
+
+                // Function names: pink in place of monaco's default magenta (FF00FF).
+                { token: 'predefined.sql', foreground: 'FF79C6' },
             ],
             colors: {},
         },
@@ -416,6 +477,7 @@
                 { token: 'string.sql', foreground: '8E3DAF' },
                 { token: 'string.escape.sql', foreground: 'B565D0' },
                 { token: 'identifier.escaped.sql', foreground: 'C0392B' },
+                { token: 'predefined.sql', foreground: 'D6336C' },
             ],
             colors: {},
         },
@@ -612,6 +674,9 @@
             ...definition.operators.map(w => ({ label: w, kind: Kind.Operator, insertText: w })),
             ...definition.quantifiers.map(w => ({ label: w, kind: Kind.Operator, insertText: w })),
             ...definition.builtinTypes.map(w => ({ label: w, kind: Kind.TypeParameter, insertText: w })),
+            // Not in the type list: json and jsonb are not reserved. See the header comment.
+            { label: 'JSONB', kind: Kind.TypeParameter, insertText: 'JSONB' },
+            { label: 'JSON', kind: Kind.TypeParameter, insertText: 'JSON' },
             ...definition.builtinFunctions.map(w => ({
                 label: w,
                 kind: Kind.Function,

@@ -202,12 +202,13 @@ public static class QueryPlanParser
     internal static PlanNodeKind Classify(string name) => name.ToLowerInvariant() switch
     {
         "table-scan" or "index-lookup" or "index-range-scan" or "index-in-list"
-            or "derived-table-scan" or "function-scan" or "constant-source" => PlanNodeKind.Source,
+            or "derived-table-scan" or "function-scan" or "constant-source" or "gin-scan" => PlanNodeKind.Source,
         "nested-loop-join" or "index-nested-loop-join" or "hash-join" or "merge-join"
             or "semi-join" or "anti-join" or "null-aware-anti-join" => PlanNodeKind.Join,
         "filter" or "having-filter" => PlanNodeKind.Filter,
         "aggregate" or "distinct" => PlanNodeKind.Aggregate,
         "sort" or "topk" => PlanNodeKind.Sort,
+        "window" => PlanNodeKind.Window,
         "limit" => PlanNodeKind.Limit,
         "project" => PlanNodeKind.Project,
         "gather" => PlanNodeKind.Exchange,
@@ -218,7 +219,7 @@ public static class QueryPlanParser
     private static string? DescribeTarget(string name, string detail) => name.ToLowerInvariant() switch
     {
         "table-scan" => Value(TableKey, detail),
-        "index-lookup" or "index-range-scan" or "index-in-list" => Value(IndexKey, detail),
+        "index-lookup" or "index-range-scan" or "index-in-list" or "gin-scan" => Value(IndexKey, detail),
         "derived-table-scan" => Value(AliasKey, detail),
         "function-scan" => FunctionCall(detail),
         _ => null,

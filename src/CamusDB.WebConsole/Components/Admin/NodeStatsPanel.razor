@@ -1,0 +1,455 @@
+@using System.Globalization
+@using CamusDB.Client
+@inject AdminService Admin
+@implements IAsyncDisposable
+
+<div class="admin-panel">
+    <div class="admin-controls">
+        @if (_endpoints.Count > 1)
+        {
+            @* Each node answers for itself only, so a cluster is read one node at a time. *@
+            <MudSelect T="string"
+                       Value="_endpoint"
+                       ValueChanged="OnEndpointChanged"
+                       Label="Node"
+                       Variant="Variant.Outlined"
+                       Margin="Margin.Dense"
+                       Class="admin-select-field">
+                @foreach (string endpoint in _endpoints)
+                {
+                    <MudSelectItem Value="@endpoint">@endpoint</MudSelectItem>
+                }
+            </MudSelect>
+        }
+
+        <MudButton Variant="Variant.Filled"
+                   Color="Color.Primary"
+                   Size="Size.Small"
+                   StartIcon="@Icons.Material.Filled.Refresh"
+                   Disabled="_busy"
+                   OnClick="() => RefreshAsync()">
+            @(_busy ? "Reading…" : "Take reading")
+        </MudButton>
+
+        <MudSwitch T="bool"
+                   Value="_autoRefresh"
+                   ValueChanged="OnAutoRefreshChanged"
+                   Color="Color.Primary"
+                   Label="@($"Auto every {AutoRefreshSeconds}s")" />
+    </div>
+
+    @if (_error is not null)
+    {
+        <MudAlert Severity="Severity.Error" Dense="true" Class="admin-alert">@_error</MudAlert>
+    }
+
+    <div class="results-toolbar">
+        @if (_stats is null)
+        {
+            <span>No reading yet.</span>
+        }
+        else
+        {
+            CamusNodeIdentity node = _stats.Node;
+            <span class="results-table-badge">@(node.NodeId.Length > 0 ? $"node {node.NodeId}" : "this node")</span>
+            @* A standalone node has a placeholder Raft endpoint (localhost:0), so only a cluster node shows it. *@
+            @if (node.ClusterMode && node.Endpoint.Length > 0)
+            {
+                <span>raft @node.Endpoint</span>
+            }
+            <span>@(node.ClusterMode ? "cluster" : "standalone")</span>
+            @if (node.Version.Length > 0)
+            {
+                @* The version carries the build commit after '+'. The tooltip shows all of it. *@
+                <span title="@node.Version">v@(node.Version.Split('+')[0])</span>
+            }
+            <span>up @FormatUptime(node.UptimeSeconds)</span>
+            <span>sampled @FormatSampledAt(node.SampledAtUnixMs)</span>
+        }
+    </div>
+
+    <div class="node-stats-scroll">
+        @if (_stats is null)
+        {
+            <div class="empty-state">Take a reading to see the disk, CPU and memory of the node.</div>
+        }
+        else
+        {
+            <section class="node-section">
+                <h2 class="node-section-title">Disks</h2>
+                @if (_stats.Disks.Count == 0)
+                {
+                    <div class="empty-state">The node sent no disk volume.</div>
+                }
+                else
+                {
+                    <div class="results-grid-wrap node-table-wrap">
+                        <table class="results-table">
+                            <thead>
+                                <tr>
+                                    <th>role<span class="col-type">path</span></th>
+                                    <th>mount point</th>
+                                    <th>used</th>
+                                    <th>available</th>
+                                    <th>total</th>
+                                    <th>engine files</th>
+                                    <th>write watermark</th>
+                                    <th>state</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (CamusDiskVolumeStats disk in _stats.Disks)
+                                {
+                                    DiskState state = StateOf(disk);
+                                    <tr>
+                                        <td>
+                                            @disk.Role
+                                            <span class="col-type">@disk.Path</span>
+                                        </td>
+                                        <td class="@(disk.MountPoint.Length == 0 ? "cell-null" : null)">
+                                            @(disk.MountPoint.Length == 0 ? "—" : disk.MountPoint)
+                                        </td>
+                                        <td>@Meter(Share(disk.UsedBytes, disk.TotalBytes), MeterLevel(state, Share(disk.UsedBytes, disk.TotalBytes)), $"{FormatBytes(disk.UsedBytes)} used")</td>
+                                        <td class="@NumberClass(disk.AvailableBytes)">@FormatBytes(disk.AvailableBytes)</td>
+                                        <td class="@NumberClass(disk.TotalBytes)">@FormatBytes(disk.TotalBytes)</td>
+                                        <td class="@NumberClass(disk.EngineBytes)">@FormatBytes(disk.EngineBytes)</td>
+                                        <td class="@NumberClass(disk.MinFreeDiskBytes)">
+                                            @(disk.Role == CamusDiskVolumeStats.WalRole ? "not watched" : FormatBytes(disk.MinFreeDiskBytes))
+                                        </td>
+                                        <td class="@StateClass(state)">@StateText(state)</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            </section>
+
+            <div class="node-grid">
+                <section class="node-section node-card">
+                    <h2 class="node-section-title">CPU</h2>
+                    <dl class="node-kv">
+                        <dt>Server process</dt>
+                        <dd>
+                            @Meter(_stats.Cpu.ProcessCpuPercent < 0 ? null : _stats.Cpu.ProcessCpuPercent / 100,
+                                   _stats.Cpu.ProcessCpuPercent >= 90 ? "danger" : _stats.Cpu.ProcessCpuPercent >= 75 ? "warn" : "ok",
+                                   "")
+                            <span class="node-hint">average over @FormatWindow(_stats.Cpu.ProcessCpuWindowMs), as a share of all processors</span>
+                        </dd>
+                        <dt>Processors</dt>
+                        <dd class="@NumberClass(_stats.Cpu.ProcessorCount)">@FormatCount(_stats.Cpu.ProcessorCount)</dd>
+                        <dt>Load average</dt>
+                        <dd>
+                            <span class="@NumberClass(_stats.Cpu.LoadAverage1m)">@FormatLoad(_stats.Cpu.LoadAverage1m)</span>
+                            <span class="node-sep">/</span>
+                            <span class="@NumberClass(_stats.Cpu.LoadAverage5m)">@FormatLoad(_stats.Cpu.LoadAverage5m)</span>
+                            <span class="node-sep">/</span>
+                            <span class="@NumberClass(_stats.Cpu.LoadAverage15m)">@FormatLoad(_stats.Cpu.LoadAverage15m)</span>
+                            <span class="node-hint">1, 5 and 15 minutes, for the host (not the container)</span>
+                        </dd>
+                    </dl>
+                </section>
+
+                <section class="node-section node-card">
+                    <h2 class="node-section-title">Memory</h2>
+                    <dl class="node-kv">
+                        <dt>Host in use</dt>
+                        <dd>
+                            @{
+                                CamusMemoryStats memory = _stats.Memory;
+                                long hostUsed = memory.HostTotalBytes >= 0 && memory.HostAvailableBytes >= 0
+                                    ? memory.HostTotalBytes - memory.HostAvailableBytes
+                                    : -1;
+                                double? hostShare = Share(hostUsed, memory.HostTotalBytes);
+                            }
+                            @Meter(hostShare, hostShare >= 0.9 ? "danger" : hostShare >= 0.8 ? "warn" : "ok",
+                                   $"{FormatBytes(hostUsed)} of {FormatBytes(memory.HostTotalBytes)}")
+                            <span class="node-hint">the cgroup limit when one applies, else the physical memory</span>
+                        </dd>
+                        <dt>Process working set</dt>
+                        <dd class="@NumberClass(memory.ProcessWorkingSetBytes)">@FormatBytes(memory.ProcessWorkingSetBytes)</dd>
+                        <dt>Managed heap</dt>
+                        <dd class="@NumberClass(memory.GcHeapBytes)">@FormatBytes(memory.GcHeapBytes)</dd>
+                        <dt>Heap committed</dt>
+                        <dd class="@NumberClass(memory.GcCommittedBytes)">@FormatBytes(memory.GcCommittedBytes)</dd>
+                        <dt>Heap limit</dt>
+                        @if (memory.GcMemoryLimitBytes == 0)
+                        {
+                            <dd class="node-state-warn">
+                                No limit
+                                <span class="node-hint">
+                                    the heap can grow until the host has no memory left; set a container memory
+                                    limit or DOTNET_GCHeapHardLimitPercent
+                                </span>
+                            </dd>
+                        }
+                        else
+                        {
+                            <dd class="@NumberClass(memory.GcMemoryLimitBytes)">@FormatBytes(memory.GcMemoryLimitBytes)</dd>
+                        }
+                    </dl>
+                </section>
+            </div>
+
+            @if (_stats.Errors.Count > 0)
+            {
+                <section class="node-section">
+                    <h2 class="node-section-title">Values the node could not read</h2>
+                    <ul class="node-errors">
+                        @foreach (CamusNodeStatsError error in _stats.Errors)
+                        {
+                            <li><code>@error.Field</code> @error.Message</li>
+                        }
+                    </ul>
+                </section>
+            }
+        }
+    </div>
+
+    <div class="admin-note">
+        The node answers for itself only, from values it samples in the background: disks every 2 s,
+        CPU and host memory every 5 s, engine files and mount points every 60 s. A superuser can read
+        it, and so can an account with <code>GRANT MONITOR ON *.* TO user</code>.
+    </div>
+</div>
+
+@code {
+    private const int AutoRefreshSeconds = 5;
+
+    /// <summary>
+    /// The server alerts nothing early: below the watermark, writes already fail. This share of the
+    /// watermark is an earlier warning, the one the server's own documentation proposes.
+    /// </summary>
+    private const int LowSpaceFactor = 4;
+
+    private IReadOnlyList<string> _endpoints = [];
+    private string? _endpoint;
+    private CamusNodeStats? _stats;
+    private bool _busy;
+    private bool _autoRefresh;
+    private string? _error;
+
+    private PeriodicTimer? _timer;
+    private CancellationTokenSource? _autoCts;
+
+    private enum DiskState
+    {
+        Unknown,
+        Ok,
+        Low,
+        BelowWatermark,
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _endpoints = Admin.NodeEndpoints;
+            _endpoint = _endpoints.Count > 0 ? _endpoints[0] : null;
+        }
+        catch (InvalidOperationException ex)
+        {
+            _error = ex.Message;
+            return;
+        }
+
+        await RefreshAsync();
+    }
+
+    private async Task OnEndpointChanged(string endpoint)
+    {
+        _endpoint = endpoint;
+        _stats = null;
+        await RefreshAsync();
+    }
+
+    private async Task RefreshAsync()
+    {
+        if (_busy)
+            return;
+
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            _stats = await Admin.LoadNodeStatsAsync(_endpoint);
+        }
+        catch (Exception ex)
+        {
+            _error = Describe(ex);
+        }
+        finally
+        {
+            _busy = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task OnAutoRefreshChanged(bool enabled)
+    {
+        _autoRefresh = enabled;
+
+        await StopAutoRefreshAsync();
+
+        if (!enabled)
+            return;
+
+        _autoCts = new CancellationTokenSource();
+        _timer = new PeriodicTimer(TimeSpan.FromSeconds(AutoRefreshSeconds));
+        _ = RunAutoRefreshAsync(_timer, _autoCts.Token);
+    }
+
+    private async Task RunAutoRefreshAsync(PeriodicTimer timer, CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (await timer.WaitForNextTickAsync(cancellationToken))
+                await InvokeAsync(RefreshAsync);
+        }
+        catch (OperationCanceledException)
+        {
+            // Toggled off, or the circuit is going away.
+        }
+    }
+
+    private async Task StopAutoRefreshAsync()
+    {
+        if (_autoCts is not null)
+        {
+            await _autoCts.CancelAsync();
+            _autoCts.Dispose();
+            _autoCts = null;
+        }
+
+        _timer?.Dispose();
+        _timer = null;
+    }
+
+    public async ValueTask DisposeAsync() => await StopAutoRefreshAsync();
+
+    private static string Describe(Exception ex) =>
+        ex is CamusException camus ? CamusSessionService.Describe(camus) : ex.Message;
+
+    private static DiskState StateOf(CamusDiskVolumeStats disk)
+    {
+        if (disk.BelowWatermark)
+            return DiskState.BelowWatermark;
+
+        if (disk.AvailableBytes < 0)
+            return DiskState.Unknown;
+
+        // A wal entry has a watermark of 0: the gate does not watch that volume.
+        if (disk.MinFreeDiskBytes > 0 && disk.AvailableBytes < disk.MinFreeDiskBytes * LowSpaceFactor)
+            return DiskState.Low;
+
+        return DiskState.Ok;
+    }
+
+    private static string StateText(DiskState state) => state switch
+    {
+        DiskState.BelowWatermark => "Below watermark: writes refused (CADB0536)",
+        DiskState.Low => $"Low: less than {LowSpaceFactor}× the watermark",
+        DiskState.Ok => "OK",
+        _ => "—",
+    };
+
+    private static string StateClass(DiskState state) => state switch
+    {
+        DiskState.BelowWatermark => "node-state-danger",
+        DiskState.Low => "node-state-warn",
+        DiskState.Ok => "node-state-ok",
+        _ => "cell-null",
+    };
+
+    /// <summary>
+    /// The color of a disk bar. Below the watermark, writes fail. A low volume, or a volume that is 90%
+    /// full, is a warning even when the watermark is far away: the watermark is small (64 MiB by
+    /// default), and a full disk slows down the whole host.
+    /// </summary>
+    private static string MeterLevel(DiskState state, double? usedShare) => state switch
+    {
+        DiskState.BelowWatermark => "danger",
+        DiskState.Low => "warn",
+        _ when usedShare >= 0.9 => "warn",
+        _ => "ok",
+    };
+
+    /// <summary>A horizontal bar for a share from 0 to 1, with its text. A null share has no bar.</summary>
+    private static RenderFragment Meter(double? share, string level, string text) => __builder =>
+    {
+        if (share is not double value)
+        {
+            <span class="cell-null">—</span>
+            return;
+        }
+
+        double percent = Math.Clamp(value * 100, 0, 100);
+        <span class="node-meter">
+            <span class="node-meter-track" role="img" aria-label="@percent.ToString("0", CultureInfo.InvariantCulture) percent">
+                <span class="node-meter-fill node-meter-@level" style="width:@percent.ToString("0.#", CultureInfo.InvariantCulture)%"></span>
+            </span>
+            <span class="node-meter-text">
+                @percent.ToString(percent < 10 ? "0.#" : "0", CultureInfo.InvariantCulture)%@(text.Length > 0 ? $" · {text}" : "")
+            </span>
+        </span>
+    };
+
+    private static double? Share(long part, long whole) =>
+        part < 0 || whole <= 0 ? null : (double)part / whole;
+
+    private static string NumberClass(double value) => value < 0 ? "cell-null" : "cell-number";
+
+    private static string FormatBytes(long bytes)
+    {
+        if (bytes < 0)
+            return "—";
+
+        string[] units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
+        double value = bytes;
+        int unit = 0;
+        while (value >= 1024 && unit < units.Length - 1)
+        {
+            value /= 1024;
+            unit++;
+        }
+
+        return unit == 0
+            ? $"{bytes.ToString("N0", CultureInfo.InvariantCulture)} B"
+            : $"{value.ToString(value >= 100 ? "0" : "0.0", CultureInfo.InvariantCulture)} {units[unit]}";
+    }
+
+    private static string FormatCount(long value) =>
+        value < 0 ? "—" : value.ToString("N0", CultureInfo.InvariantCulture);
+
+    private static string FormatLoad(double value) =>
+        value < 0 ? "—" : value.ToString("0.00", CultureInfo.InvariantCulture);
+
+    private static string FormatWindow(long ms)
+    {
+        if (ms < 0)
+            return "an unknown window";
+
+        return ms >= 60_000
+            ? $"{(ms / 60_000.0).ToString("0.#", CultureInfo.InvariantCulture)} min"
+            : $"{(ms / 1000.0).ToString("0", CultureInfo.InvariantCulture)} s";
+    }
+
+    private static string FormatUptime(long seconds)
+    {
+        if (seconds < 0)
+            return "—";
+
+        TimeSpan span = TimeSpan.FromSeconds(seconds);
+        if (span.TotalDays >= 1)
+            return $"{(int)span.TotalDays}d {span.Hours}h {span.Minutes}m";
+        if (span.TotalHours >= 1)
+            return $"{span.Hours}h {span.Minutes}m";
+        return $"{span.Minutes}m {span.Seconds}s";
+    }
+
+    private static string FormatSampledAt(long unixMs) =>
+        unixMs < 0
+            ? "—"
+            : DateTimeOffset.FromUnixTimeMilliseconds(unixMs).UtcDateTime.ToString("HH:mm:ss", CultureInfo.InvariantCulture) + " UTC";
+}
