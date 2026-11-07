@@ -130,7 +130,7 @@ TLS terminates in front of it.
 
 ## Endpoint changes are a request-forgery surface
 
-The Configure dialog, and a [vendor launch](README.md#embedding-the-console-vendor-launch) payload
+The Configure dialog, and a [vendor launch](docs/vendor-launch.md) payload
 with `endpoint`, can repoint the session at another CamusDB server. **The console's own process
 opens that URL**, so a caller can reach hosts the visitor cannot — cloud metadata services,
 internal admin ports. The dialog is open to any visitor. Two controls exist and you should set one:
