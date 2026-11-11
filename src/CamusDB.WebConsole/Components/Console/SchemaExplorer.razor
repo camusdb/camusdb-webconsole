@@ -85,6 +85,10 @@
                                          OnClick="() => Defer(() => CreateTableAsync(db))">
                                 Create a Table
                             </MudMenuItem>
+                            <MudMenuItem Icon="@Icons.Material.Filled.Functions"
+                                         OnClick="() => Defer(() => InsertCreateFunctionAsync(db))">
+                                Create a Function
+                            </MudMenuItem>
                             <MudMenuItem Icon="@Icons.Material.Filled.DriveFileRenameOutline"
                                          OnClick="() => Defer(() => RenameDatabaseAsync(db))">
                                 Rename Database
@@ -104,7 +108,7 @@
                             {
                                 <div class="schema-node mud-text-secondary">Loading…</div>
                             }
-                            else if (db.Tables.Count == 0 && db.Sequences.Count == 0)
+                            else if (db.Tables.Count == 0 && db.Sequences.Count == 0 && db.Functions.Count == 0)
                             {
                                 <div class="schema-node mud-text-secondary">(no tables)</div>
                             }
@@ -164,6 +168,10 @@
                                             <MudMenuItem Icon="@Icons.Material.Filled.Link"
                                                          OnClick="() => Defer(() => AddForeignKeyAsync(db, table))">
                                                 Add a Foreign Key
+                                            </MudMenuItem>
+                                            <MudMenuItem Icon="@Icons.Material.Filled.Bolt"
+                                                         OnClick="() => Defer(() => InsertCreateTriggerAsync(db, table))">
+                                                Add a Trigger
                                             </MudMenuItem>
                                             <MudMenuItem Icon="@Icons.Material.Filled.Comment"
                                                          OnClick="() => Defer(() => EditCommentsAsync(db, table))">
@@ -263,6 +271,38 @@
                                                         </ChildContent>
                                                     </MudMenu>
                                                 }
+                                                @foreach (TriggerSchemaInfo trg in table.Triggers)
+                                                {
+                                                    <MudMenu ActivationEvent="MudBlazor.MouseEvent.RightClick"
+                                                             PositionAtCursor="true"
+                                                             Dense="true"
+                                                             Class="schema-context-menu-host">
+                                                        <ActivatorContent>
+                                                            <div class="schema-node"
+                                                                 @ondblclick="() => ShowCreateTriggerAsync(trg)"
+                                                                 @ondblclick:stopPropagation="true"
+                                                                 @oncontextmenu="context.ToggleAsync"
+                                                                 @oncontextmenu:preventDefault="true"
+                                                                 title="@TriggerTitle(trg)">
+                                                                <span style="width:20px;display:inline-block;"></span>
+                                                                <MudIcon Icon="@Icons.Material.Filled.Bolt" Size="Size.Small" />
+                                                                <span class="schema-node-label">@trg.Name</span>
+                                                                <span class="schema-node-detail">@trg.Detail</span>
+                                                            </div>
+                                                        </ActivatorContent>
+                                                        <ChildContent>
+                                                            <MudMenuItem Icon="@Icons.Material.Filled.Code"
+                                                                         OnClick="() => Defer(() => ShowCreateTriggerAsync(trg))">
+                                                                Show Create Trigger
+                                                            </MudMenuItem>
+                                                            <MudMenuItem Icon="@Icons.Material.Filled.Delete"
+                                                                         IconColor="Color.Error"
+                                                                         OnClick="() => Defer(() => DropTriggerAsync(db, table, trg))">
+                                                                Drop Trigger
+                                                            </MudMenuItem>
+                                                        </ChildContent>
+                                                    </MudMenu>
+                                                }
                                                 @if (table.Columns.Count == 0 && table.Indexes.Count == 0)
                                                 {
                                                     <div class="schema-node mud-text-secondary">(no columns)</div>
@@ -304,6 +344,41 @@
                                                          IconColor="Color.Error"
                                                          OnClick="() => Defer(() => DropSequenceAsync(db, seq))">
                                                 Drop Sequence
+                                            </MudMenuItem>
+                                        </ChildContent>
+                                    </MudMenu>
+                                }
+
+                                @foreach (FunctionSchemaInfo fn in VisibleFunctions(db))
+                                {
+                                    <MudMenu ActivationEvent="MudBlazor.MouseEvent.RightClick"
+                                             PositionAtCursor="true"
+                                             Dense="true"
+                                             Class="schema-context-menu-host">
+                                        <ActivatorContent>
+                                            <div class="schema-node"
+                                                 @ondblclick="() => ShowCreateFunctionAsync(fn)"
+                                                 @ondblclick:stopPropagation="true"
+                                                 @oncontextmenu="context.ToggleAsync"
+                                                 @oncontextmenu:preventDefault="true"
+                                                 title="@FunctionTitle(fn)">
+                                                <span style="width:20px;display:inline-block;"></span>
+                                                <MudIcon Icon="@Icons.Material.Filled.Functions"
+                                                         Size="Size.Small"
+                                                         Color="@(fn.Failed ? Color.Error : Color.Inherit)" />
+                                                <span class="schema-node-label">@fn.Signature</span>
+                                                <span class="schema-node-detail">@(fn.Returns ?? "function")</span>
+                                            </div>
+                                        </ActivatorContent>
+                                        <ChildContent>
+                                            <MudMenuItem Icon="@Icons.Material.Filled.Code"
+                                                         OnClick="() => Defer(() => ShowCreateFunctionAsync(fn))">
+                                                Show Create Function
+                                            </MudMenuItem>
+                                            <MudMenuItem Icon="@Icons.Material.Filled.Delete"
+                                                         IconColor="Color.Error"
+                                                         OnClick="() => Defer(() => DropFunctionAsync(db, fn))">
+                                                Drop Function
                                             </MudMenuItem>
                                         </ChildContent>
                                     </MudMenu>
@@ -362,7 +437,8 @@
             : _databases.Where(db =>
                 db.Name.Contains(_filter, StringComparison.OrdinalIgnoreCase)
                 || db.Tables.Any(t => t.Name.Contains(_filter, StringComparison.OrdinalIgnoreCase))
-                || db.Sequences.Any(s => s.Name.Contains(_filter, StringComparison.OrdinalIgnoreCase)));
+                || db.Sequences.Any(s => s.Name.Contains(_filter, StringComparison.OrdinalIgnoreCase))
+                || db.Functions.Any(f => f.Name.Contains(_filter, StringComparison.OrdinalIgnoreCase)));
 
     protected override void OnInitialized()
     {
@@ -524,6 +600,7 @@
                 .Select(t => new TableEntry { Name = t })
                 .ToList();
             db.Sequences = await LoadSequencesAsync();
+            db.Functions = await LoadFunctionsAsync();
             db.Loaded = true;
         }
         catch (Exception ex)
@@ -548,6 +625,7 @@
             table.Columns = (await Schema.ListColumnsAsync(table.Name)).ToList();
             table.Indexes = (await Schema.ListIndexesAsync(table.Name)).ToList();
             table.ForeignKeys = await LoadForeignKeysAsync(table.Name);
+            table.Triggers = await LoadTriggersAsync(table.Name);
             table.Loaded = true;
         }
         catch (Exception ex)
@@ -571,6 +649,38 @@
         try
         {
             return (await Schema.ListSequencesAsync()).ToList();
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
+    /// <summary>
+    /// Functions are secondary to the table list, as sequences are: a server older than SHOW
+    /// FUNCTIONS, or a user without the privilege to list them, still gets the tables.
+    /// </summary>
+    private async Task<List<FunctionSchemaInfo>> LoadFunctionsAsync()
+    {
+        try
+        {
+            return (await Schema.ListFunctionsAsync()).ToList();
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
+    /// <summary>
+    /// Triggers are secondary to the columns and indexes: a server older than SHOW TRIGGERS, or a
+    /// user without the privilege to list them, still gets the rest of the table.
+    /// </summary>
+    private async Task<List<TriggerSchemaInfo>> LoadTriggersAsync(string table)
+    {
+        try
+        {
+            return (await Schema.ListTriggersAsync(table)).ToList();
         }
         catch
         {
@@ -628,6 +738,45 @@
         return sb.ToString();
     }
 
+    private IEnumerable<FunctionSchemaInfo> VisibleFunctions(DbEntry db)
+    {
+        if (string.IsNullOrWhiteSpace(_filter))
+            return db.Functions;
+
+        return db.Functions.Where(f => f.Name.Contains(_filter, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string FunctionTitle(FunctionSchemaInfo fn)
+    {
+        System.Text.StringBuilder sb = new();
+        sb.Append(fn.Signature).Append(" RETURNS ").Append(fn.Returns ?? "?")
+            .Append("\nLanguage ").Append(fn.Language ?? "?");
+        // The owner is empty when authentication is off.
+        if (!string.IsNullOrEmpty(fn.Owner))
+            sb.Append(", owner ").Append(fn.Owner);
+        if (string.Equals(fn.NullInput, "returns null", StringComparison.OrdinalIgnoreCase))
+            sb.Append(", returns NULL on NULL input");
+        sb.Append("\nOn this node: ").Append(fn.State ?? "?");
+        return sb.ToString();
+    }
+
+    private static string TriggerTitle(TriggerSchemaInfo trg)
+    {
+        System.Text.StringBuilder sb = new();
+        sb.Append(trg.Name).Append(" — ").Append(trg.FiresOn).Append(" on ").Append(trg.Table);
+        if (trg.TypeName is not null)
+            sb.Append("\nExtension type ").Append(trg.TypeName)
+                .Append(trg.Extension is null ? "" : $" ({trg.Extension})");
+        else
+        {
+            sb.Append("\nLanguage ").Append(trg.Form ?? "?");
+            // The owner is empty when authentication is off.
+            if (!string.IsNullOrEmpty(trg.Owner))
+                sb.Append(", runs as ").Append(trg.Owner);
+        }
+        return sb.ToString();
+    }
+
     private static string ForeignKeyTitle(ForeignKeySchemaInfo fk)
     {
         System.Text.StringBuilder sb = new();
@@ -641,6 +790,48 @@
 
     private Task ShowCreateSequenceAsync(SequenceSchemaInfo seq) =>
         OnInsertSql.InvokeAsync(SqlBuilder.BuildShowCreateSequence(seq.Name));
+
+    private Task ShowCreateFunctionAsync(FunctionSchemaInfo fn) =>
+        OnInsertSql.InvokeAsync(SqlBuilder.BuildShowCreateFunction(fn.Name));
+
+    private Task ShowCreateTriggerAsync(TriggerSchemaInfo trg) =>
+        OnInsertSql.InvokeAsync(SqlBuilder.BuildShowCreateTrigger(trg.Name, trg.Table));
+
+    /// <summary>
+    /// Puts a CREATE FUNCTION statement to edit into the active tab. The server runs it only when
+    /// inline_functions_enabled is on, and refuses it with CADB0841 when it is off.
+    /// </summary>
+    private Task InsertCreateFunctionAsync(DbEntry db) =>
+        InsertInDatabaseAsync(db,
+            "CREATE FUNCTION my_function(s STRING) RETURNS STRING LANGUAGE csharp AS $$\n" +
+            "    return s.Trim().ToLowerInvariant();\n" +
+            "$$");
+
+    /// <summary>
+    /// Puts a CREATE TRIGGER statement with an inline C# body into the active tab. The server runs
+    /// it only when inline_triggers_enabled is on, and refuses it with CADB0841 when it is off.
+    /// </summary>
+    private Task InsertCreateTriggerAsync(DbEntry db, TableEntry table) =>
+        InsertInDatabaseAsync(db,
+            $"CREATE TRIGGER {SqlBuilder.QuoteIdent(table.Name + "_trigger")} ON {SqlBuilder.QuoteIdent(table.Name)} " +
+            "BEFORE INSERT, UPDATE LANGUAGE csharp AS $$\n" +
+            "    // NEW is the row to write, and OLD the row before an UPDATE or a DELETE.\n" +
+            "    // Throw an exception to refuse the change.\n" +
+            "$$");
+
+    /// <summary>Makes <paramref name="db"/> the session database, then puts <paramref name="sql"/> into the active tab.</summary>
+    private async Task InsertInDatabaseAsync(DbEntry db, string sql)
+    {
+        try
+        {
+            await Session.ChangeDatabaseAsync(db.Name, notify: true);
+            await OnInsertSql.InvokeAsync(sql);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
 
     private Task InsertSelectAsync(string table) =>
         OnInsertSql.InvokeAsync($"SELECT * FROM {table}\nLIMIT 100");
@@ -805,6 +996,62 @@
 
             Snackbar.Add($"Sequence '{seq.Name}' dropped.", Severity.Success);
             await ReloadDatabaseTablesAsync(db);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    private async Task DropFunctionAsync(DbEntry db, FunctionSchemaInfo fn)
+    {
+        bool ok = await ConfirmAsync(
+            "Drop function",
+            $"Drop function '{fn.Signature}' in database '{db.Name}'? The server refuses the drop while a view or a CHECK constraint calls it. This cannot be undone.",
+            "Drop Function");
+        if (!ok)
+            return;
+
+        try
+        {
+            await Session.ChangeDatabaseAsync(db.Name, notify: true);
+            QueryResultModel result = await Queries.ExecuteAsync(SqlBuilder.BuildDropFunction(fn.Name));
+            if (!result.Success)
+            {
+                Snackbar.Add(result.ErrorMessage ?? "Drop function failed.", Severity.Error);
+                return;
+            }
+
+            Snackbar.Add($"Function '{fn.Name}' dropped.", Severity.Success);
+            await ReloadDatabaseTablesAsync(db);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    private async Task DropTriggerAsync(DbEntry db, TableEntry table, TriggerSchemaInfo trg)
+    {
+        bool ok = await ConfirmAsync(
+            "Drop trigger",
+            $"Drop trigger '{trg.Name}' on table '{table.Name}'? This cannot be undone.",
+            "Drop Trigger");
+        if (!ok)
+            return;
+
+        try
+        {
+            await Session.ChangeDatabaseAsync(db.Name, notify: true);
+            QueryResultModel result = await Queries.ExecuteAsync(SqlBuilder.BuildDropTrigger(trg.Name, table.Name));
+            if (!result.Success)
+            {
+                Snackbar.Add(result.ErrorMessage ?? "Drop trigger failed.", Severity.Error);
+                return;
+            }
+
+            Snackbar.Add($"Trigger '{trg.Name}' dropped.", Severity.Success);
+            await ReloadTableDetailsAsync(db, table);
         }
         catch (Exception ex)
         {
@@ -1253,6 +1500,7 @@
         public bool Loading { get; set; }
         public List<TableEntry> Tables { get; set; } = [];
         public List<SequenceSchemaInfo> Sequences { get; set; } = [];
+        public List<FunctionSchemaInfo> Functions { get; set; } = [];
     }
 
     private sealed class TableEntry
@@ -1264,5 +1512,6 @@
         public List<ColumnSchemaInfo> Columns { get; set; } = [];
         public List<IndexSchemaInfo> Indexes { get; set; } = [];
         public List<ForeignKeySchemaInfo> ForeignKeys { get; set; } = [];
+        public List<TriggerSchemaInfo> Triggers { get; set; } = [];
     }
 }

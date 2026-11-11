@@ -57,6 +57,20 @@
  * The jsonb operators are ->, ->>, #>, #>>, #-, @>, <@, ?, ?| and ?&. '<@' is the operator only when
  * no name character follows it: `x<@p` is still `x < @p`, as in the lexer.
  *
+ * BIGINT is another spelling of INT64, and it is not reserved either. So it is colored as a type only
+ * where a type goes, as JSONB is. DOUBLE PRECISION is one lexer token across the two words, so
+ * PRECISION alone stays a name.
+ *
+ * Inline functions and triggers: CREATE [OR REPLACE] FUNCTION f(a INT64) RETURNS STRING LANGUAGE
+ * csharp AS $$ body $$, and CREATE TRIGGER t ON tbl BEFORE INSERT LANGUAGE csharp AS $$ body $$. No
+ * word of these statements is reserved: FUNCTION, FUNCTIONS, TRIGGERS, RETURNS, CALLED, INPUT and
+ * LANGUAGE are plain identifiers that the parse action checks. So they are phrases too.
+ *
+ * The body is dollar-quoted text: $$ … $$ or $tag$ … $tag$, where the tag is an ASCII identifier. The
+ * text is raw up to the same quote, with no escapes. The only language is csharp, so the body is
+ * colored by Monaco's C# tokenizer. One difference from the lexer: Monarch makes every rule regex
+ * case-insensitive here, so $Fn$ also closes $fn$ in the editor. The lexer compares the tags exactly.
+ *
  * Registered as its own language id rather than by overriding "sql": Monaco loads a basic language's
  * tokenizer lazily, on first use, so replacing the "sql" provider at page load races with that import
  * and can be silently overwritten.
@@ -88,7 +102,7 @@
             'CHECK', 'COLUMN', 'COLUMNS', 'COMMENT', 'COMMIT', 'CONSTRAINT',
             'CREATE', 'CROSS', 'DATABASE', 'DATABASES', 'DEFAULT', 'DEFERRABLE',
             'DELETE', 'DESC', 'DESCRIBE', 'DISTINCT', 'DROP', 'ELSE',
-            'END', 'EVICT', 'EXCEPT', 'EXPLAIN', 'FALSE', 'FOR',
+            'END', 'ESCAPE', 'EVICT', 'EXCEPT', 'EXPLAIN', 'FALSE', 'FOR',
             'FORCE', 'FOREIGN', 'FROM', 'GRANT', 'GRANTS', 'GROUP',
             'HAVING', 'IDENTIFIED', 'IF', 'INCLUDE', 'INDEX', 'INDEXES',
             'INITIALLY', 'INNER', 'INSERT', 'INTERSECT', 'INTO', 'JOIN',
@@ -174,7 +188,7 @@
             'REGEXP_SUBSTR', 'REPLACE', 'ROUND', 'ROW_NUMBER', 'RTRIM', 'SECOND',
             'SETVAL', 'SET_BIT', 'SET_BYTE', 'SHA1', 'SHA256', 'SHA512',
             'SIGN', 'SQRT', 'STARTS_WITH', 'STATEMENT_TIMESTAMP', 'STRPOS', 'STR_ID',
-            'STR_TO_DATE', 'SUBSTRING', 'SUM', 'SYSDATE', 'TO_BASE64', 'TO_BOOL',
+            'STR_TO_DATE', 'SUBSTR', 'SUBSTRING', 'SUM', 'SYSDATE', 'TO_BASE64', 'TO_BOOL',
             'TO_BYTES', 'TO_CHAR', 'TO_DATE', 'TO_DATETIME', 'TO_FLOAT32', 'TO_FLOAT64',
             'TO_ID', 'TO_INT64', 'TO_JSON', 'TO_JSONB', 'TO_STRING', 'TO_TIMESTAMP',
             'TRANSACTION_TIMESTAMP', 'TRIM', 'TRUNC', 'UNHEX', 'UNIX_TIMESTAMP', 'UNIX_TIMESTAMP_MS',
@@ -189,6 +203,7 @@
                 { include: '@comments' },
                 { include: '@whitespace' },
                 { include: '@numbers' },
+                { include: '@dollarQuotes' },
                 { include: '@strings' },
                 { include: '@complexIdentifiers' },
                 // One "table@index" pair, as SHOW RANGES / SHOW RANGE ... FROM INDEX accepts it. The
@@ -235,9 +250,10 @@
                 // made of characters the rule below already colors.
                 [/@>|<@(?![A-Za-z0-9_])|\?[|&]?/, 'operator'],
 
-                // Includes CamusDB's POSIX regex operators (~  ~*  !~  !~*), concatenation (||) and the
-                // bitwise operators (&  |  #  ~  <<  >>). '#' is XOR, never a comment. There is no '^'.
-                [/[<>=!%&+\-*/|~#]/, 'operator'],
+                // Includes CamusDB's POSIX regex operators (~  ~*  !~  !~*), concatenation (||), the
+                // bitwise operators (&  |  #  ~  <<  >>) and the power operator (^). '#' is XOR, never
+                // a comment.
+                [/[<>=!%&+\-*/|~#^]/, 'operator'],
             ],
 
             whitespace: [
@@ -283,6 +299,20 @@
                 [/""/, 'string'],
                 [/[^\\"]+/, 'string'],
                 [/"/, { token: 'string', next: '@pop' }],
+            ],
+
+            // $$ … $$ and $tag$ … $tag$: the C# body of an inline function or trigger. The state name
+            // carries the tag ('dollarBody.' for $$, 'dollarBody.fn' for $fn$), and $S2 reads it back,
+            // so only the same quote closes the body. Monaco looks for that closing quote before it
+            // hands the line to the C# tokenizer, so a quote with another tag stays C# text, as in
+            // the lexer. With no closing quote, the rest of the text is in the body.
+            // The tag group always matches, so $1 is '' for $$. The quotes take the string color.
+            dollarQuotes: [
+                [/\$([A-Za-z_]\w*|)\$/, { token: 'string', next: '@dollarBody.$1', nextEmbedded: 'csharp' }],
+            ],
+
+            dollarBody: [
+                [/\$$S2\$/, { token: 'string', next: '@pop', nextEmbedded: '@pop' }],
             ],
 
             // Backticks are the only identifier quoting CamusDB has (EscIdentifier). Tokenized as
@@ -338,10 +368,25 @@
                 [/DO\s+(?:NOTHING|UPDATE)\b/i, 'keyword'],
                 [/UPSERT(?=\s+INTO\b)/i, 'keyword'],
 
-                // CREATE TRIGGER t ON tbl BEFORE INSERT, UPDATE EXTERNAL NAME 'Ns.Type'
+                // CREATE TRIGGER t ON tbl BEFORE INSERT, UPDATE EXTERNAL NAME 'Ns.Type', and the same with
+                // LANGUAGE csharp AS $$ body $$. DROP TRIGGER t ON tbl.
                 [/(?:CREATE|DROP)\s+TRIGGER\b/i, 'keyword'],
                 [/(?:BEFORE|AFTER)(?=\s+(?:INSERT|UPDATE|DELETE)\b)/i, 'keyword'],
                 [/EXTERNAL\s+NAME\b/i, 'keyword'],
+
+                // Inline functions. ALTER FUNCTION f OWNER TO u takes the name, as ALTER VIEW does
+                // below. RETURNS follows the ')' of the parameter list, so a column named returns
+                // stays plain. The type after it is colored when it is BIGINT or JSONB, which are
+                // plain identifiers too.
+                [/(ALTER\s+FUNCTION)(\s+)([A-Za-z_]\w*)(\s+)(OWNER\s+TO)\b/i,
+                    ['keyword', 'white', 'identifier', 'white', 'keyword']],
+                [/(?:CREATE(?:\s+OR\s+REPLACE)?|ALTER|DROP)\s+FUNCTION\b/i, 'keyword'],
+                [/SHOW\s+(?:CREATE\s+(?:FUNCTION|TRIGGER)|FUNCTIONS|TRIGGERS)\b/i, 'keyword'],
+                [/(\))(\s*)(RETURNS)(\s+)(JSONB?|BIGINT)\b/i, ['delimiter.parenthesis', 'white', 'keyword', 'white', 'type']],
+                [/(\))(\s*)(RETURNS)\b/i, ['delimiter.parenthesis', 'white', 'keyword']],
+                [/(?:RETURNS\s+NULL|CALLED)\s+ON\s+NULL\s+INPUT\b/i, 'keyword'],
+                // LANGUAGE csharp AS $$: the AS or the quote after the language name pins the phrase.
+                [/(LANGUAGE)(\s+)([A-Za-z_]\w*)(?=\s+AS\b|\s*\$)/i, ['keyword', 'white', 'identifier']],
 
                 // Views and materialized views.
                 [/CREATE\s+OR\s+REPLACE\b/i, 'keyword'],
@@ -377,11 +422,15 @@
                 [/(\d+)(\s+)(PRECEDING|FOLLOWING)\b/i, ['number', 'white', 'keyword']],
                 [/(@[A-Za-z_]\w*)(\s+)(PRECEDING|FOLLOWING)\b/i, ['variable.parameter', 'white', 'keyword']],
 
-                // JSONB and JSON, only where a type goes. See the header comment.
-                [/(::)(\s*)(JSONB?)\b/i, ['operator', 'white', 'type']],
-                [/(AS)(\s+)(JSONB?)(?=\s*\))/i, ['keyword', 'white', 'type']],
+                // JSONB, JSON and BIGINT, only where a type goes. See the header comment. Only JSONB
+                // has a typed literal (JSONB '{}').
+                [/(::)(\s*)(JSONB?|BIGINT)\b/i, ['operator', 'white', 'type']],
+                [/(AS)(\s+)(JSONB?|BIGINT)(?=\s*\))/i, ['keyword', 'white', 'type']],
+                [/(ARRAY)(\s*)(\()(\s*)(BIGINT)(?=\s*\))/i, ['type', 'white', 'delimiter.parenthesis', 'white', 'type']],
                 [/JSONB?(?=\s*')/i, 'type'],
                 [/(?!@coloredWord)([A-Za-z_]\w*)(\s+)(JSONB?)(?=\s*(?:[,)]|NOT\b|NULL\b|DEFAULT\b|COMMENT\b|STORAGE\b|$))/i,
+                    ['identifier', 'white', 'type']],
+                [/(?!@coloredWord)([A-Za-z_]\w*)(\s+)(BIGINT)(?=\s*(?:[,)]|NOT\b|NULL\b|DEFAULT\b|COMMENT\b|PRIMARY\b|UNIQUE\b|CHECK\b|REFERENCES\b|CONSTRAINT\b|GENERATED\b|$))/i,
                     ['identifier', 'white', 'type']],
 
                 // GIN indexes: CREATE INDEX i ON t USING GIN (doc jsonb_path_ops), CREATE INVERTED
@@ -407,6 +456,9 @@
                 [/IF\s+NOT\s+EXISTS\b/i, 'keyword'],
                 [/IF\s+EXISTS\b/i, 'keyword'],
                 [/PRIMARY\s+KEY\b/i, 'keyword'],
+                // DOUBLE PRECISION is one TTYPE_FLOAT64 token. The lexer also accepts a line break
+                // between the two words, but Monarch tokenizes one line at a time.
+                [/DOUBLE\s+PRECISION\b/i, 'type'],
                 // ON DELETE NO ACTION: one TNOACTION token in the lexer. The lexer also accepts a line
                 // break between the two words, but Monarch tokenizes one line at a time, so that form
                 // leaves NO uncolored.
@@ -526,16 +578,29 @@
         return name.length >= 2 && name[0] === '`' && name[name.length - 1] === '`' ? name.slice(1, -1) : name;
     }
 
+    // $$ or $tag$ at lastIndex. Sticky, so it matches only where it starts.
+    const dollarQuote = /\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$/y;
+
     /*
-     * The bounds of the statement around `offset`, cut at each ';' outside strings, backtick names
-     * and comments. These are the lexer's rules, as in SqlScript.cs; an E'...' string is read as a
-     * plain string here, which can only make the bounds a little wrong for completion.
+     * The bounds of the statement around `offset`, cut at each ';' outside strings, backtick names,
+     * comments and dollar-quoted bodies. These are the lexer's rules, as in SqlScript.cs; an E'...'
+     * string is read as a plain string here, which can only make the bounds a little wrong for
+     * completion.
      */
     function statementBounds(text, offset) {
         let start = 0;
         let i = 0;
         while (i < text.length) {
             const c = text[i];
+            if (c === '$') {
+                dollarQuote.lastIndex = i;
+                const quote = dollarQuote.exec(text);
+                if (quote) {
+                    const end = text.indexOf(quote[0], i + quote[0].length);
+                    i = end < 0 ? text.length : end + quote[0].length;
+                    continue;
+                }
+            }
             if (c === '-' && text[i + 1] === '-') {
                 const end = text.indexOf('\n', i);
                 i = end < 0 ? text.length : end;
@@ -677,6 +742,8 @@
             // Not in the type list: json and jsonb are not reserved. See the header comment.
             { label: 'JSONB', kind: Kind.TypeParameter, insertText: 'JSONB' },
             { label: 'JSON', kind: Kind.TypeParameter, insertText: 'JSON' },
+            { label: 'BIGINT', kind: Kind.TypeParameter, insertText: 'BIGINT' },
+            { label: 'DOUBLE PRECISION', kind: Kind.TypeParameter, insertText: 'DOUBLE PRECISION' },
             ...definition.builtinFunctions.map(w => ({
                 label: w,
                 kind: Kind.Function,

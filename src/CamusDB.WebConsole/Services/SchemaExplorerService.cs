@@ -197,6 +197,88 @@ public sealed class SchemaExplorerService(CamusSessionService session)
             .ToList();
     }
 
+    /// <summary>
+    /// Lists the inline functions of the current database. SHOW FUNCTIONS arrived with inline C#
+    /// functions, so an older server rejects it; callers treat a failure as "no functions".
+    ///
+    /// <para>The server also lists the compiled code of a dropped or replaced function that a running
+    /// statement still holds, with the state <c>unloading</c> and NULL in every other column. That
+    /// code is not a function of the database, so it is left out.</para>
+    /// </summary>
+    public async Task<IReadOnlyList<FunctionSchemaInfo>> ListFunctionsAsync(CancellationToken cancellationToken = default)
+    {
+        await using CamusCommand command = session.GetConnection().CreateCamusCommand("SHOW FUNCTIONS");
+        await using CamusDataReader reader =
+            await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+
+        Dictionary<string, int> ordinals = BuildOrdinalMap(reader);
+        List<FunctionSchemaInfo> functions = [];
+
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            string name = ReadField(reader, ordinals, "name") ?? "";
+            string? state = ReadField(reader, ordinals, "state");
+            if (name.Length == 0 || string.Equals(state, "unloading", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            functions.Add(new FunctionSchemaInfo
+            {
+                Name = name,
+                Arguments = ReadField(reader, ordinals, "arguments"),
+                Returns = ReadField(reader, ordinals, "returns"),
+                NullInput = ReadField(reader, ordinals, "null_input"),
+                Language = ReadField(reader, ordinals, "language"),
+                Owner = ReadField(reader, ordinals, "owner"),
+                State = state,
+            });
+        }
+
+        return functions
+            .OrderBy(f => f.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Lists the row triggers of <paramref name="table"/>, in both forms, in the order they fire. SHOW
+    /// TRIGGERS arrived with inline C# triggers, so an older server rejects it; callers treat a failure
+    /// as "no triggers".
+    /// </summary>
+    public async Task<IReadOnlyList<TriggerSchemaInfo>> ListTriggersAsync(
+        string table,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(table);
+        string sql = $"SHOW TRIGGERS ON {SqlBuilder.QuoteIdent(table)}";
+
+        await using CamusCommand command = session.GetConnection().CreateCamusCommand(sql);
+        await using CamusDataReader reader =
+            await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+
+        Dictionary<string, int> ordinals = BuildOrdinalMap(reader);
+        List<TriggerSchemaInfo> triggers = [];
+
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            string name = ReadField(reader, ordinals, "name") ?? "";
+            if (name.Length == 0)
+                continue;
+
+            triggers.Add(new TriggerSchemaInfo
+            {
+                Name = name,
+                Table = ReadField(reader, ordinals, "table") ?? table,
+                Timing = ReadField(reader, ordinals, "timing"),
+                Events = ReadField(reader, ordinals, "events"),
+                Form = ReadField(reader, ordinals, "form"),
+                TypeName = ReadField(reader, ordinals, "type_name"),
+                Extension = ReadField(reader, ordinals, "extension"),
+                Owner = ReadField(reader, ordinals, "owner"),
+            });
+        }
+
+        return triggers;
+    }
+
     public async Task<IReadOnlyList<CamusBranchRow>> ListBranchesAsync(
         string database,
         CancellationToken cancellationToken = default)

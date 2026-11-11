@@ -116,6 +116,71 @@ public sealed class SequenceSchemaInfo
 }
 
 /// <summary>
+/// One row of SHOW FUNCTIONS: an inline function, a scalar function with a C# body. <c>State</c> is
+/// what the node that answered did with it: <c>not compiled</c>, <c>compiled</c> or
+/// <c>failed: reason</c>. Each node compiles a function at its own first call.
+/// </summary>
+public sealed class FunctionSchemaInfo
+{
+    public required string Name { get; init; }
+
+    /// <summary>The parameter list without its parentheses, for example <c>a INT64, b STRING</c>.</summary>
+    public string? Arguments { get; init; }
+
+    public string? Returns { get; init; }
+
+    /// <summary><c>called</c>, or <c>returns null</c> for RETURNS NULL ON NULL INPUT.</summary>
+    public string? NullInput { get; init; }
+
+    public string? Language { get; init; }
+
+    public string? Owner { get; init; }
+
+    public string? State { get; init; }
+
+    /// <summary>The signature the schema tree shows: <c>name(arguments)</c>.</summary>
+    public string Signature => $"{Name}({Arguments})";
+
+    public bool Failed => State?.StartsWith("failed", StringComparison.OrdinalIgnoreCase) ?? false;
+}
+
+/// <summary>
+/// One row of SHOW TRIGGERS ON table. <c>Form</c> is the language of an inline body
+/// (<c>csharp</c>), or <c>extension</c> for a type of an installed extension.
+/// </summary>
+public sealed class TriggerSchemaInfo
+{
+    public required string Name { get; init; }
+
+    public required string Table { get; init; }
+
+    /// <summary><c>BEFORE</c> or <c>AFTER</c>.</summary>
+    public string? Timing { get; init; }
+
+    /// <summary>The events, for example <c>INSERT, UPDATE</c>.</summary>
+    public string? Events { get; init; }
+
+    public string? Form { get; init; }
+
+    /// <summary>The extension type that runs the trigger. Null for an inline body.</summary>
+    public string? TypeName { get; init; }
+
+    public string? Extension { get; init; }
+
+    /// <summary>The user whose rights the SQL of an inline body runs with. Null for an extension trigger.</summary>
+    public string? Owner { get; init; }
+
+    /// <summary>When and on what it fires, for example <c>BEFORE INSERT, UPDATE</c>.</summary>
+    public string FiresOn => $"{Timing} {Events}".Trim();
+
+    /// <summary>
+    /// The text after the name in the schema tree: the timing only. The events make the row too
+    /// long for the name, so they are in the tooltip.
+    /// </summary>
+    public string Detail => Timing ?? "trigger";
+}
+
+/// <summary>
 /// One foreign key, read back out of SHOW CREATE TABLE. There is no SHOW FOREIGN KEYS, so the
 /// constraint clause the server renders is the only read surface. <c>OnDelete</c> and
 /// <c>OnUpdate</c> hold the action words as rendered (<c>NO ACTION</c> when the clause is absent).

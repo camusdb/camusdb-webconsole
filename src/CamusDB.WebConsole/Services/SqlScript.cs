@@ -16,7 +16,10 @@ public enum SchemaEffect
     /// <summary>Nothing the tree shows: queries, DML, users, grants, extensions.</summary>
     None,
 
-    /// <summary>The objects of the database the statement ran in: tables, views, indexes, sequences, comments.</summary>
+    /// <summary>
+    /// The objects of the database the statement ran in: tables, views, indexes, sequences, functions,
+    /// triggers, comments.
+    /// </summary>
     Objects,
 
     /// <summary>The list of databases: CREATE, DROP, ALTER or RENAME DATABASE.</summary>
@@ -34,9 +37,13 @@ public enum SchemaEffect
 /// an ordinary character;</item>
 /// <item><c>E'…'</c> and <c>E"…"</c> strings, where a backslash also escapes the next character;</item>
 /// <item><c>`…`</c> quoted identifiers;</item>
-/// <item><c>-- …</c> comments to the end of the line, and <c>/* … */</c> comments, which do not nest.</item>
+/// <item><c>-- …</c> comments to the end of the line, and <c>/* … */</c> comments, which do not nest;</item>
+/// <item><c>$$ … $$</c> and <c>$tag$ … $tag$</c> dollar-quoted text, the C# body of <c>CREATE
+/// FUNCTION</c> and <c>CREATE TRIGGER</c>. The text is raw up to the same quote, so it holds
+/// semicolons, quotes and comments as text. The tag is an ASCII identifier.</item>
 /// </list>
-/// An unterminated quote or comment runs to the end of the text. The server reports that error.
+/// An unterminated quote, dollar quote or comment runs to the end of the text. The server reports
+/// that error.
 /// </summary>
 public static class SqlScript
 {
@@ -285,6 +292,15 @@ public static class SqlScript
                 continue;
             }
 
+            if (c == '$' && DollarQuoteLength(sql, i) is int quoteLength and > 0)
+            {
+                // Raw text up to the same quote. With no closing quote, the rest of the text is in it.
+                int close = sql.IndexOf(sql.Substring(i, quoteLength), i + quoteLength, StringComparison.Ordinal);
+                i = close < 0 ? sql.Length : close + quoteLength;
+                yield return new Token(TokenKind.String, start, i);
+                continue;
+            }
+
             if (char.IsAsciiLetter(c) || c == '_')
             {
                 i++;
@@ -384,6 +400,23 @@ public static class SqlScript
         }
 
         return sql.Length;
+    }
+
+    /// <summary>
+    /// The length of the dollar quote that starts at <paramref name="start"/>: <c>$$</c>, or <c>$</c>,
+    /// an ASCII identifier and <c>$</c>. Zero when the <c>$</c> there starts no quote.
+    /// </summary>
+    private static int DollarQuoteLength(string sql, int start)
+    {
+        int i = start + 1;
+
+        if (i < sql.Length && (char.IsAsciiLetter(sql[i]) || sql[i] == '_'))
+        {
+            while (i < sql.Length && (char.IsAsciiLetterOrDigit(sql[i]) || sql[i] == '_'))
+                i++;
+        }
+
+        return i < sql.Length && sql[i] == '$' ? i + 1 - start : 0;
     }
 
     private static char Next(string sql, int i) => i + 1 < sql.Length ? sql[i + 1] : '\0';

@@ -18,6 +18,7 @@ public static class SqlBuilder
         "OID",
         "INT64",
         "INT",
+        "SMALLINT",
         "FLOAT64",
         "DOUBLE",
         "FLOAT32",
@@ -43,7 +44,7 @@ public static class SqlBuilder
         "BLOB", "BOOL", "BOOLEAN", "BRANCH", "BRANCHES", "BY", "BYTES", "CASE", "CAST", "CHAR",
         "CHECK", "COLUMN", "COLUMNS", "COMMENT", "COMMIT", "CONSTRAINT", "CREATE", "CROSS", "DATABASE",
         "DATABASES", "DATE", "DATETIME", "DECIMAL", "DEFAULT", "DEFERRABLE", "DELETE", "DESC", "DESCRIBE",
-        "DISTINCT", "DOUBLE", "DROP", "ELSE", "END", "EVICT", "EXCEPT", "EXISTS", "EXPLAIN", "FALSE",
+        "DISTINCT", "DOUBLE", "DROP", "ELSE", "END", "ESCAPE", "EVICT", "EXCEPT", "EXISTS", "EXPLAIN", "FALSE",
         "FLOAT", "FLOAT32", "FLOAT64", "FOR", "FORCE", "FOREIGN", "FROM", "GRANT", "GRANTS", "GROUP",
         "GUID", "HAVING", "IDENTIFIED", "IF", "ILIKE", "IN", "INCLUDE", "INDEX", "INDEXES", "INITIALLY",
         "INNER", "INSERT", "INT", "INT64", "INTEGER", "INTERSECT", "INTO", "IS", "JOIN", "KEY", "LEFT", "LIKE",
@@ -228,6 +229,33 @@ public static class SqlBuilder
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sequence);
         return $"SHOW CREATE SEQUENCE {QuoteIdent(sequence)}";
+    }
+
+    public static string BuildDropFunction(string function)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(function);
+        return $"DROP FUNCTION {QuoteIdent(function)}";
+    }
+
+    public static string BuildShowCreateFunction(string function)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(function);
+        return $"SHOW CREATE FUNCTION {QuoteIdent(function)}";
+    }
+
+    /// <summary>A trigger name is unique within its table only, so DROP TRIGGER names the table too.</summary>
+    public static string BuildDropTrigger(string trigger, string table)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(trigger);
+        ArgumentException.ThrowIfNullOrWhiteSpace(table);
+        return $"DROP TRIGGER {QuoteIdent(trigger)} ON {QuoteIdent(table)}";
+    }
+
+    public static string BuildShowCreateTrigger(string trigger, string table)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(trigger);
+        ArgumentException.ThrowIfNullOrWhiteSpace(table);
+        return $"SHOW CREATE TRIGGER {QuoteIdent(trigger)} ON {QuoteIdent(table)}";
     }
 
     public static string BuildDropDatabase(string database)
@@ -552,9 +580,18 @@ public static class SqlBuilder
 
         if (IsIntegerType(type))
         {
-            if (IsValidIntegerLiteral(trimmed))
+            if (!IsValidIntegerLiteral(trimmed))
+            {
+                error = "Expected an integer (digits and optional leading -).";
+                return false;
+            }
+
+            (long min, long max) = IntegerRange(type);
+            if (long.TryParse(trimmed, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out long value)
+                && value >= min && value <= max)
                 return true;
-            error = "Expected an integer (digits and optional leading -).";
+
+            error = $"Out of range for {type.Trim().ToUpperInvariant()}: {min} to {max}.";
             return false;
         }
 
@@ -657,6 +694,25 @@ public static class SqlBuilder
         }
 
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// The values a column of the integer type <paramref name="type"/> accepts. The server enforces the
+    /// PostgreSQL widths: SMALLINT is 16 bits, INT and INTEGER are 32 bits, and a value out of range is
+    /// CADB0420. SHOW COLUMNS shows a column made before the widths as INT64, so its values keep the
+    /// 64-bit range. Every other integer type is 64 bits.
+    /// </summary>
+    public static (long Min, long Max) IntegerRange(string? type)
+    {
+        string t = type?.Trim() ?? "";
+
+        if (t.Equals("SMALLINT", StringComparison.OrdinalIgnoreCase))
+            return (short.MinValue, short.MaxValue);
+
+        if (t.Equals("INT", StringComparison.OrdinalIgnoreCase) || t.Equals("INTEGER", StringComparison.OrdinalIgnoreCase))
+            return (int.MinValue, int.MaxValue);
+
+        return (long.MinValue, long.MaxValue);
     }
 
     public static bool IsValidIntegerLiteral(string text)

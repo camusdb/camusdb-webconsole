@@ -1,6 +1,6 @@
 # Schema browser
 
-The sidebar shows the databases, and the tables and sequences of each database.
+The sidebar shows the databases, and the tables, sequences and functions of each database.
 
 | Object | Read with |
 | --- | --- |
@@ -10,15 +10,26 @@ The sidebar shows the databases, and the tables and sequences of each database.
 | Indexes | `SHOW INDEXES FROM` |
 | Foreign keys | `SHOW CREATE TABLE`, because no other statement lists them |
 | Sequences | `SHOW SEQUENCES`. They come after the tables |
+| Functions | `SHOW FUNCTIONS`. They come after the sequences |
+| Triggers | `SHOW TRIGGERS ON`. They come after the foreign keys of their table |
 
 - Hover a foreign key to see its columns, its parent table and its `ON DELETE` and `ON UPDATE`
   actions.
 - Hover a sequence to see its start, increment, bounds, cache and owner.
+- A function shows its signature and return type. Hover it to see its language, its owner and what
+  the node did with it: `not compiled`, `compiled` or `failed: …`. A failed function has a red icon.
+  Each node compiles a function at its first call, so the state is for the node that answered.
+- A trigger shows `BEFORE` or `AFTER`. Hover it to see its events and its form: an inline C# body
+  and the user that its SQL runs as, or an extension type.
+- A server older than inline functions refuses `SHOW FUNCTIONS` and `SHOW TRIGGERS`. The tree then
+  shows no functions and no triggers, and the rest of the tree loads.
 - Type in the filter box to filter by name.
 - Drag the edge of the sidebar to change its width.
 - Click a database to make it the session database.
 - Double-click a table to put `SELECT * FROM {table} LIMIT 100` into the active tab.
 - Double-click a sequence to put `SHOW CREATE SEQUENCE {sequence}` into the active tab.
+- Double-click a function to put `SHOW CREATE FUNCTION {function}` into the active tab.
+- Double-click a trigger to put `SHOW CREATE TRIGGER {trigger} ON {table}` into the active tab.
 
 ## Right-click menus
 
@@ -26,14 +37,28 @@ Each *Drop* item asks for confirmation.
 
 | Object | Items |
 | --- | --- |
-| Database | *Create a Table*, *Rename Database*, *Drop Database* |
-| Table | *Edit/View Data*, *Rename Table*, *Drop Table*, *Export Table*, *Add a Column*, *Add an Index*, *Add a Foreign Key* |
+| Database | *Create a Table*, *Create a Function*, *Rename Database*, *Drop Database* |
+| Table | *Edit/View Data*, *Rename Table*, *Drop Table*, *Export Table*, *Add a Column*, *Add an Index*, *Add a Foreign Key*, *Add a Trigger* |
 | Column | *Rename Column* |
 | Index | *Rename Index* |
 | Foreign key | *Drop Constraint*. An index that the constraint created is also dropped |
 | Sequence | *Show Create Sequence*, *Rename Sequence*, *Drop Sequence* |
+| Function | *Show Create Function*, *Drop Function*. The server refuses the drop while a view or a `CHECK` constraint calls the function (`CADB0844`) |
+| Trigger | *Show Create Trigger*, *Drop Trigger* |
 
 The dialogs run ordinary SQL. For a change that they cannot make, type the SQL in the editor.
+
+## Functions and triggers
+
+*Create a Function* and *Add a Trigger* open no dialog. They put a `CREATE FUNCTION` or a
+`CREATE TRIGGER … LANGUAGE csharp` statement into the active tab, with a short C# body. Edit the
+statement, then run it.
+
+- The server runs an inline function only when `inline_functions_enabled` is on, and an inline
+  trigger only when `inline_triggers_enabled` is on. Both are off by default. When a setting is off,
+  the statement fails with `CADB0841`.
+- The body is dollar-quoted text: `$$ … $$`, or `$tag$ … $tag$` when the body holds `$$`.
+- For the C# rules, see `docs/csharp-extensions.md` in the server repository.
 
 ## Create a table
 
@@ -109,6 +134,9 @@ pages through the table, and it sorts and filters on the server (see
 - The edit dialog comes from the column schema. Primary key fields are read-only. A nullable field
   gets a **NULL** toggle.
 - The console checks each value against the column type before it builds the statement.
+- An integer value must be in the range of its type. `SMALLINT` is 16 bits, and `INT` and `INTEGER`
+  are 32 bits. A column made before the server enforced these widths shows as `INT64` and keeps the
+  64-bit range.
 - `UPDATE` and `DELETE` find the row by its primary key. A table without a primary key has both
   actions disabled, with a *Primary key required* hint.
 - A `NUMERIC` value is written as `NUMERIC '…'`, in `SET` and in the `WHERE` on the primary key. The

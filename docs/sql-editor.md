@@ -17,8 +17,10 @@ has its own title, timing and cancellable run.
 
 ## Scripts
 
-The console splits a script at each `;` that is not in a string, a backtick name or a comment. It uses
-the rules of the server's `SqlScriptSplitter` (see `Services/SqlScript.cs`).
+The console splits a script at each `;` that is not in a string, a backtick name, a comment or a
+dollar-quoted body (`$$ … $$` or `$tag$ … $tag$`). It uses the rules of the server's
+`SqlScriptSplitter` (see `Services/SqlScript.cs`). So a script can hold a `CREATE FUNCTION` whose C#
+body has `;` in it.
 
 - Each statement gets its own result tab.
 - The run stops at the first statement that fails. The result tabs show how many statements did not
@@ -32,6 +34,8 @@ lists come from the server's lexer and scalar function registry.
 
 - Backtick names show in salmon and string literals in purple. Both colors are in the `camus-dark`
   theme at the top of that file.
+- The body of an inline function or trigger, between dollar quotes, gets the colors of Monaco's C#
+  language.
 - The completion list also has the tables of the session database, and the columns of each table that
   the statement names.
 - After `FROM`, `JOIN`, `INTO`, `UPDATE` or `TABLE`, the tables come first.
