@@ -61,6 +61,16 @@
  * where a type goes, as JSONB is. DOUBLE PRECISION is one lexer token across the two words, so
  * PRECISION alone stays a name.
  *
+ * INTERVAL is a keyword only before its literal: the lexer returns TINTERVAL only when a quote, a
+ * digit or a parameter follows the word (INTERVAL '1 day', INTERVAL '3' HOUR, INTERVAL 3 HOUR,
+ * INTERVAL @n DAY). Anywhere else the word is a name, so a column named interval keeps working. The
+ * unit after the value is a plain identifier that the parse action checks (IntervalMath.TryParseUnit),
+ * so it is colored only in that phrase. An interval is a value of an expression only: a table cannot
+ * store it. So interval is colored as a type after '::' and after AS in a CAST, and never in a column
+ * definition.
+ *
+ * AGE is a function, but age is also a common column name. So AGE is colored only when a '(' follows.
+ *
  * Inline functions and triggers: CREATE [OR REPLACE] FUNCTION f(a INT64) RETURNS STRING LANGUAGE
  * csharp AS $$ body $$, and CREATE TRIGGER t ON tbl BEFORE INSERT LANGUAGE csharp AS $$ body $$. No
  * word of these statements is reserved: FUNCTION, FUNCTIONS, TRIGGERS, RETURNS, CALLED, INPUT and
@@ -158,6 +168,10 @@
         // only where the server registers it. JSON_VALID, JSON_TYPE, JSON_EXTRACT, JSON_VALUE,
         // JSON_CONTAINS and JSON_ARRAY_LENGTH are the older MySQL-style functions on text.
         //
+        // MAKE_INTERVAL, JUSTIFY_DAYS, JUSTIFY_HOURS, JUSTIFY_INTERVAL and DATE_BIN come from
+        // IntervalScalarFunctions, and DATE_SUB from DateTimeScalarFunctions. AGE is registered too,
+        // but it is colored only before a '(' (see the header comment), so it is not in this list.
+        //
         // COUNT_DISTINCT, GROUP_CONCAT, STRING_AGG and ARRAY_AGG are absent on purpose. The engine names
         // them only to reject them (AggregateFunctionCatalog.ReservedOnly). No aggregator implements them.
         builtinFunctions: [
@@ -165,7 +179,7 @@
             'CARDINALITY', 'CEIL', 'CEILING', 'CLOCK_TIMESTAMP', 'COALESCE', 'CONCAT',
             'CONTAINS', 'CONVERT_FROM', 'CONVERT_TO', 'COSINE_DISTANCE', 'COUNT', 'CRC32',
             'CUME_DIST', 'CURRENT_DATABASE', 'CURRENT_DATE', 'CURRENT_ROLE', 'CURRENT_TIMESTAMP', 'CURRENT_USER',
-            'CURRVAL', 'DATE_ADD', 'DATE_DIFF', 'DATE_FORMAT', 'DATE_PART', 'DATE_TRUNC',
+            'CURRVAL', 'DATE_ADD', 'DATE_BIN', 'DATE_DIFF', 'DATE_FORMAT', 'DATE_PART', 'DATE_SUB', 'DATE_TRUNC',
             'DAY', 'DAYNAME', 'DAYOFMONTH', 'DAYOFWEEK', 'DAYOFYEAR', 'DECODE',
             'DENSE_RANK', 'DIGEST', 'ENCODE', 'ENDS_WITH', 'EXTRACT', 'FIRST_VALUE',
             'FLOOR', 'FROM_BASE64', 'FROM_UNIXTIME', 'GENERATE_SERIES', 'GEN_ID', 'GEN_RANDOM_BYTES',
@@ -178,9 +192,9 @@
             'JSON_ARRAY_ELEMENTS', 'JSON_ARRAY_ELEMENTS_TEXT', 'JSON_ARRAY_LENGTH', 'JSON_BUILD_ARRAY', 'JSON_BUILD_OBJECT', 'JSON_CONTAINS',
             'JSON_EACH', 'JSON_EACH_TEXT', 'JSON_EXTRACT', 'JSON_EXTRACT_PATH', 'JSON_EXTRACT_PATH_TEXT', 'JSON_OBJECT',
             'JSON_OBJECT_AGG', 'JSON_OBJECT_KEYS', 'JSON_STRIP_NULLS', 'JSON_TYPE', 'JSON_TYPEOF', 'JSON_VALID',
-            'JSON_VALUE', 'L2_DISTANCE', 'LAG', 'LASTVAL', 'LAST_DAY', 'LAST_VALUE',
+            'JSON_VALUE', 'JUSTIFY_DAYS', 'JUSTIFY_HOURS', 'JUSTIFY_INTERVAL', 'L2_DISTANCE', 'LAG', 'LASTVAL', 'LAST_DAY', 'LAST_VALUE',
             'LEAD', 'LENGTH', 'LOWER', 'LTRIM', 'MAKEDATE', 'MAKE_DATE',
-            'MAKE_TIMESTAMP', 'MAX', 'MD5', 'MIN', 'MINUTE', 'MOD',
+            'MAKE_INTERVAL', 'MAKE_TIMESTAMP', 'MAX', 'MD5', 'MIN', 'MINUTE', 'MOD',
             'MONTH', 'MONTHNAME', 'NEXTVAL', 'NOW', 'NTH_VALUE', 'NTILE',
             'NULLIF', 'NVL', 'OCTET_LENGTH', 'PERCENT_RANK', 'POSITION', 'POW',
             'POWER', 'QUARTER', 'RANDOM', 'RANK', 'REGEXP_COUNT', 'REGEXP_INSTR',
@@ -197,6 +211,13 @@
 
         // Quantifiers of a comparison: `x > ALL (SELECT ...)`. See the header comment.
         quantifiers: ['ALL', 'ANY', 'SOME'],
+
+        // The unit of INTERVAL '3' HOUR and INTERVAL 3 HOUR: each spelling IntervalMath.TryParseUnit
+        // accepts. Monarch expands `@intervalUnit` in a rule's regex to this source. The `\b` after the
+        // reference in each rule keeps a short spelling (m, s, d) from matching the start of a word.
+        intervalUnit: 'millennium|millennia|millenniums|mils?|century|centuries|c|cent|decades?|decs?'
+            + '|years?|y|yrs?|quarters?|months?|mons?|weeks?|w|days?|d|hours?|h|hrs?'
+            + '|minutes?|m|mins?|seconds?|s|secs?|milliseconds?|ms|msecs?|microseconds?|us|usecs?',
 
         tokenizer: {
             root: [
@@ -422,10 +443,22 @@
                 [/(\d+)(\s+)(PRECEDING|FOLLOWING)\b/i, ['number', 'white', 'keyword']],
                 [/(@[A-Za-z_]\w*)(\s+)(PRECEDING|FOLLOWING)\b/i, ['variable.parameter', 'white', 'keyword']],
 
-                // JSONB, JSON and BIGINT, only where a type goes. See the header comment. Only JSONB
-                // has a typed literal (JSONB '{}').
-                [/(::)(\s*)(JSONB?|BIGINT)\b/i, ['operator', 'white', 'type']],
-                [/(AS)(\s+)(JSONB?|BIGINT)(?=\s*\))/i, ['keyword', 'white', 'type']],
+                // INTERVAL literals. See the header comment. A form with a unit takes the whole phrase,
+                // so the unit is colored only there. Without a unit, only the word is colored here, and
+                // the string rules color the text after it.
+                [/(INTERVAL)(\s*)('(?:[^'\\]|''|\\.)*')(\s+)(@intervalUnit)\b/i,
+                    ['keyword', 'white', 'string', 'white', 'keyword']],
+                [/(INTERVAL)(\s+)(\d+(?:\.\d+)?)(\s+)(@intervalUnit)\b/i,
+                    ['keyword', 'white', 'number', 'white', 'keyword']],
+                [/(INTERVAL)(\s*)(@[A-Za-z_]\w*)(\s+)(@intervalUnit)\b/i,
+                    ['keyword', 'white', 'variable.parameter', 'white', 'keyword']],
+                [/INTERVAL(?=\s*['@]|\s+\d)/i, 'keyword'],
+                [/AGE(?=\s*\()/i, 'predefined'],
+
+                // JSONB, JSON, BIGINT and INTERVAL, only where a type goes. See the header comment.
+                // Only JSONB has a typed literal (JSONB '{}').
+                [/(::)(\s*)(JSONB?|BIGINT|INTERVAL)\b/i, ['operator', 'white', 'type']],
+                [/(AS)(\s+)(JSONB?|BIGINT|INTERVAL)(?=\s*\))/i, ['keyword', 'white', 'type']],
                 [/(ARRAY)(\s*)(\()(\s*)(BIGINT)(?=\s*\))/i, ['type', 'white', 'delimiter.parenthesis', 'white', 'type']],
                 [/JSONB?(?=\s*')/i, 'type'],
                 [/(?!@coloredWord)([A-Za-z_]\w*)(\s+)(JSONB?)(?=\s*(?:[,)]|NOT\b|NULL\b|DEFAULT\b|COMMENT\b|STORAGE\b|$))/i,
@@ -744,6 +777,17 @@
             { label: 'JSON', kind: Kind.TypeParameter, insertText: 'JSON' },
             { label: 'BIGINT', kind: Kind.TypeParameter, insertText: 'BIGINT' },
             { label: 'DOUBLE PRECISION', kind: Kind.TypeParameter, insertText: 'DOUBLE PRECISION' },
+            // Not in the keyword list: INTERVAL is a keyword only before its literal. See the header
+            // comment.
+            { label: 'INTERVAL', kind: Kind.Keyword, insertText: 'INTERVAL' },
+            // Not in the function list: AGE is colored only before a '('. See the header comment.
+            {
+                label: 'AGE',
+                kind: Kind.Function,
+                insertText: 'AGE($0)',
+                insertTextRules: languages.CompletionItemInsertTextRule.InsertAsSnippet,
+                detail: 'CamusDB function',
+            },
             ...definition.builtinFunctions.map(w => ({
                 label: w,
                 kind: Kind.Function,

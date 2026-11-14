@@ -36,6 +36,10 @@ lists come from the server's lexer and scalar function registry.
   theme at the top of that file.
 - The body of an inline function or trigger, between dollar quotes, gets the colors of Monaco's C#
   language.
+- Some words get a color only where the server gives them a meaning. For example, `INTERVAL` is a
+  keyword only before its value (`INTERVAL '7 days'`, `INTERVAL 3 HOUR`), and `interval` is a type only
+  after `::` or `AS` in a `CAST`. `AGE` is a function only before a `(`. In other places these words
+  are plain names, so a column named `interval` or `age` keeps the color of a name.
 - The completion list also has the tables of the session database, and the columns of each table that
   the statement names.
 - After `FROM`, `JOIN`, `INTO`, `UPDATE` or `TABLE`, the tables come first.
