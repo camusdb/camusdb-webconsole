@@ -1019,6 +1019,11 @@ html, body {
     color: var(--camus-warn);
 }
 
+.plan-badge.info {
+    background: color-mix(in srgb, var(--camus-accent) 15%, transparent);
+    color: var(--camus-accent);
+}
+
 .plan-desc {
     margin-top: 2px;
     font-size: 0.8125rem;

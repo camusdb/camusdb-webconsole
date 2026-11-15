@@ -38,6 +38,10 @@ public static class QueryPlanParser
     private static readonly Regex InnerKey = DetailKey("inner");
     private static readonly Regex RightOrderKey = DetailKey("right-order");
 
+    // A reader of a WITH query that the statement computes once (PlanRenderer.RenderDerivedTableScan):
+    // a derived-table-scan, or the set operation of a query that is one.
+    private static readonly Regex ComputedOnceKey = DetailKey("computed_once");
+
     /// <summary>
     /// Returns the plan, or null when the columns are not the EXPLAIN shape or no operator row came
     /// back. A null result leaves the caller with the plain grid.
@@ -196,6 +200,7 @@ public static class QueryPlanParser
             ActualTimeMs = Double(row, ordinals, "actual_time_ms"),
             KvLookups = Long(row, ordinals, "kv_lookups"),
             KvScanEntries = Long(row, ordinals, "kv_scan_entries"),
+            ComputedOnce = Value(ComputedOnceKey, detail),
         };
     }
 

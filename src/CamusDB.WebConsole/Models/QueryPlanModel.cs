@@ -93,6 +93,13 @@ public sealed class QueryPlanNode
     public long? KvScanEntries { get; init; }
 
     /// <summary>
+    /// The name of the WITH query that this operator reads, when the statement computes that query
+    /// once: the first reader keeps its rows, and every other reader reads the kept rows. Null for
+    /// every other operator.
+    /// </summary>
+    public string? ComputedOnce { get; init; }
+
+    /// <summary>
     /// The span rows that EXPLAIN (ANALYZE) emits after a gather (<c>gather-span</c>) or after a join
     /// that ran a broadcast probe (<c>broadcast-span</c>), one per span.
     /// </summary>

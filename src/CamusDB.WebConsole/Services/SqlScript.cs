@@ -140,6 +140,97 @@ public static class SqlScript
     }
 
     /// <summary>
+    /// The statement that a leading <c>WITH</c> clause introduces: the text from its first keyword, such
+    /// as <c>SELECT</c> in <c>WITH s AS (…) SELECT …</c> or <c>UPDATE</c> in <c>WITH s AS (…) UPDATE …</c>.
+    /// A statement with no <c>WITH</c> clause comes back unchanged.
+    ///
+    /// <para>The server accepts a <c>WITH</c> in front of a <c>SELECT</c>, an <c>INSERT</c>, an
+    /// <c>UPSERT</c>, an <c>UPDATE</c> and a <c>DELETE</c>, and it runs the statement after the clause.
+    /// So the console chooses the reader, the paging and the message from that statement, as the
+    /// driver (<c>CamusSqlSyntax.SkipLeadingWith</c>) chooses the endpoint. The clause has the form
+    /// <c>WITH [RECURSIVE] name [(columns)] AS [[NOT] MATERIALIZED] (query) [, …]</c>. When the text does
+    /// not have that form, the statement comes back unchanged, and the server reports the error.</para>
+    /// </summary>
+    public static string SkipLeadingWith(string sql)
+    {
+        List<Token> tokens = [];
+        foreach (Token token in Tokenize(sql))
+        {
+            if (token.Kind is not (TokenKind.Whitespace or TokenKind.Comment))
+                tokens.Add(token);
+        }
+
+        int i = 0;
+        if (!IsWord(sql, tokens, i, "WITH"))
+            return sql;
+        i++;
+
+        if (IsWord(sql, tokens, i, "RECURSIVE"))
+            i++;
+
+        while (true)
+        {
+            if (i >= tokens.Count || tokens[i].Kind is not (TokenKind.Word or TokenKind.QuotedIdentifier))
+                return sql;
+            i++;
+
+            if (IsSymbol(sql, tokens, i, '('))
+            {
+                i = SkipParentheses(sql, tokens, i);
+                if (i < 0)
+                    return sql;
+            }
+
+            if (!IsWord(sql, tokens, i, "AS"))
+                return sql;
+            i++;
+
+            if (IsWord(sql, tokens, i, "NOT"))
+                i++;
+            if (IsWord(sql, tokens, i, "MATERIALIZED"))
+                i++;
+
+            if (!IsSymbol(sql, tokens, i, '('))
+                return sql;
+
+            i = SkipParentheses(sql, tokens, i);
+            if (i < 0 || i >= tokens.Count)
+                return sql;
+
+            if (!IsSymbol(sql, tokens, i, ','))
+                return sql[tokens[i].Start..];
+            i++;
+        }
+
+        static bool IsWord(string text, List<Token> list, int index, string word) =>
+            index < list.Count
+            && list[index].Kind == TokenKind.Word
+            && text.AsSpan(list[index].Start, list[index].End - list[index].Start).Equals(word, StringComparison.OrdinalIgnoreCase);
+
+        static bool IsSymbol(string text, List<Token> list, int index, char symbol) =>
+            index < list.Count && list[index].Kind == TokenKind.Symbol && text[list[index].Start] == symbol;
+
+        // The index after the ')' that closes the '(' at open, or -1 when the text ends first.
+        static int SkipParentheses(string text, List<Token> list, int open)
+        {
+            int depth = 0;
+            for (int j = open; j < list.Count; j++)
+            {
+                if (list[j].Kind != TokenKind.Symbol)
+                    continue;
+
+                char c = text[list[j].Start];
+                if (c == '(')
+                    depth++;
+                else if (c == ')' && --depth == 0)
+                    return j + 1;
+            }
+
+            return -1;
+        }
+    }
+
+    /// <summary>
     /// What the statement changes in the schema tree when it succeeds. The second word separates a
     /// database from the objects in one, and from the users and extensions, which the tree does not
     /// show. TRUNCATE changes rows only.
@@ -200,16 +291,21 @@ public static class SqlScript
     /// <para>The one exception is the row-locking clause, <c>FOR UPDATE …</c>, which comes after
     /// <c>LIMIT</c>. A top-level <c>FOR</c> in a <c>SELECT</c> can only start that clause, so such a
     /// statement is not paged.</para>
+    ///
+    /// <para>A <c>SELECT</c> after a <c>WITH</c> clause is paged too: the grammar takes <c>LIMIT</c> and
+    /// <c>OFFSET</c> at the end of <c>WITH … SELECT …</c>. The queries of the clause are in
+    /// parentheses, so their own <c>LIMIT</c> is not a top-level word.</para>
     /// </summary>
     public static bool IsPageableSelect(string sql)
     {
-        if (FirstWord(sql) != "SELECT")
+        string body = SkipLeadingWith(sql);
+        if (FirstWord(body) != "SELECT")
             return false;
 
         if (Split(sql).Count != 1)
             return false;
 
-        return !HasTopLevelWord(sql, "LIMIT") && !HasTopLevelWord(sql, "OFFSET") && !HasTopLevelWord(sql, "FOR");
+        return !HasTopLevelWord(body, "LIMIT") && !HasTopLevelWord(body, "OFFSET") && !HasTopLevelWord(body, "FOR");
     }
 
     /// <summary>

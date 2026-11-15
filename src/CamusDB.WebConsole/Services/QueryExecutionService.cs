@@ -9,6 +9,10 @@ public sealed class QueryExecutionService
 {
     // A statement that starts with '(' is a query: a set operation whose first operand has its own
     // ORDER BY or LIMIT, as in (SELECT …) UNION SELECT …. DESCRIBE and DESC are SHOW COLUMNS.
+    //
+    // The prefixes are matched against the statement after a leading WITH clause
+    // (SqlScript.SkipLeadingWith), so WITH s AS (…) UPDATE … is a write. A WITH stays in the two query
+    // prefixes for a clause that SkipLeadingWith cannot read: the server then reports the error.
     private static readonly Regex ResultSetPrefix = new(
         @"^\s*(\(|(SELECT|SHOW|EXPLAIN|WITH|DESCRIBE|DESC)\b)",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
@@ -148,14 +152,18 @@ public sealed class QueryExecutionService
 
             await using CamusCommand command = connection.CreateCamusCommand(sql);
 
-            if (IsResultSetStatement(sql))
-                return await ExecuteReaderAsync(command, total, _session.MaxRows, writeReturning: null, explain: IsExplainStatement(sql), stream: IsStreamStatement(sql), cancellationToken).ConfigureAwait(false);
+            // The server runs the statement after a leading WITH clause, so that statement chooses the
+            // reader and the message.
+            string body = SqlScript.SkipLeadingWith(sql);
+
+            if (IsResultSetStatement(body))
+                return await ExecuteReaderAsync(command, total, _session.MaxRows, writeReturning: null, explain: IsExplainStatement(body), stream: IsStreamStatement(body), cancellationToken).ConfigureAwait(false);
 
             // ExecuteNonQuery asks the server to discard the RETURNING rows, so the reader path is the
             // one that shows them.
-            if (IsWriteReturning(sql))
+            if (IsWriteReturning(body))
             {
-                string rowsVerb = InsertPrefix.IsMatch(sql) ? "inserted" : "affected";
+                string rowsVerb = InsertPrefix.IsMatch(body) ? "inserted" : "affected";
                 return await ExecuteReaderAsync(command, total, _session.MaxRows, writeReturning: rowsVerb, explain: false, stream: false, cancellationToken).ConfigureAwait(false);
             }
 

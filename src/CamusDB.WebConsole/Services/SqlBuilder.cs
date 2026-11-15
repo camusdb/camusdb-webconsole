@@ -53,7 +53,7 @@ public static class SqlBuilder
         "RENAME", "RESET", "RETURNING", "REVOKE", "RIGHT", "ROLLBACK",
         "SELECT", "SEQUENCE", "SEQUENCES", "SET", "SHOW", "SMALLINT", "START", "STRING", "TABLE",
         "TABLES", "TEXT", "THEN", "TIMESTAMP", "TO", "TRANSACTION", "TRUE", "TRUNCATE", "UNION", "UNIQUE",
-        "UPDATE", "USER", "UUID", "VALUES", "VARCHAR", "VIEW", "VIEWS", "WHEN", "WHERE", "WITH",
+        "UPDATE", "USER", "USING", "UUID", "VALUES", "VARCHAR", "VIEW", "VIEWS", "WHEN", "WHERE", "WITH",
         "WITHOUT",
     };
 

@@ -38,11 +38,18 @@ lists come from the server's lexer and scalar function registry.
   language.
 - Some words get a color only where the server gives them a meaning. For example, `INTERVAL` is a
   keyword only before its value (`INTERVAL '7 days'`, `INTERVAL 3 HOUR`), and `interval` is a type only
-  after `::` or `AS` in a `CAST`. `AGE` is a function only before a `(`. In other places these words
-  are plain names, so a column named `interval` or `age` keeps the color of a name.
+  after `::` or `AS` in a `CAST`. `AGE`, `DEGREES` and `RADIANS` are functions only before a `(`. In
+  other places these words are plain names, so a column named `interval` or `age` keeps the color of a
+  name.
+- `USING` is a reserved word, as in PostgreSQL. A table or column named `using` needs backticks. The
+  dialogs and the completion list add them.
 - The completion list also has the tables of the session database, and the columns of each table that
   the statement names.
-- After `FROM`, `JOIN`, `INTO`, `UPDATE` or `TABLE`, the tables come first.
+- After `FROM`, `JOIN`, `INTO`, `UPDATE` or `TABLE`, the tables come first. After the `USING` of
+  `DELETE … USING`, the tables also come first.
+- The queries of a `WITH` clause are in the list as tables, and a query hides a table with the same
+  name. The columns of a query are in the list only when its definition has a column list, as in
+  `WITH totals (account, amount) AS (…)`.
 - After `alias.` or `table.`, the list has only the columns of that table.
 - A name that is a keyword, or that is not a plain identifier, goes in with backticks.
 

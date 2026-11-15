@@ -149,6 +149,10 @@
                     {
                         <span class="plan-target">@node.Target</span>
                     }
+                    @if (node.ComputedOnce is string withQuery)
+                    {
+                        <span class="plan-badge info" title="The statement computes the WITH query @withQuery one time. The first reader keeps its rows, and each other reader reads the kept rows.">Computed once: @withQuery</span>
+                    }
                     @if (node == _hottest)
                     {
                         <span class="plan-badge hot" title="This operator has the highest estimated cost in the plan.">Highest cost</span>
@@ -322,7 +326,7 @@
         "index-range-scan" => "Reads a range of keys from an index.",
         "index-in-list" => "Looks up each value of an IN list in an index.",
         "gin-scan" => "Finds the candidate rows for a JSONB condition in a GIN index. The filter above checks each one.",
-        "derived-table-scan" => "Reads the rows of a subquery in FROM.",
+        "derived-table-scan" => "Reads the rows of a subquery in FROM or of a WITH query.",
         "function-scan" => "Makes rows with a function in FROM, without reading a table.",
         "constant-source" => "Makes one row without reading a table.",
         "filter" => "Keeps only the rows that match the condition.",

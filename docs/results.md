@@ -13,10 +13,15 @@ For `JSONB`, a JSON `null` document shows `null`, and SQL `NULL` shows `NULL`.
 
 `INSERT … RETURNING` shows the returned rows and the count of inserted rows.
 
+A `WITH` clause in front of a statement does not change how the console runs it. The statement after
+the clause decides. So `WITH s AS (…) UPDATE …` shows the count of changed rows, and
+`WITH s AS (…) DELETE … RETURNING …` shows the returned rows.
+
 ## Pages
 
 A `SELECT` without its own `LIMIT` or `OFFSET` gets one page of `MaxRows` rows (see
-[Configuration](configuration.md)).
+[Configuration](configuration.md)). This is also true for `WITH … SELECT`. A `LIMIT` in a query of the
+`WITH` clause does not stop the paging, because only a `LIMIT` at the end applies to the result.
 
 - The console adds `LIMIT MaxRows + 1` to the statement. The extra row only tells that more rows exist.
 - **Fetch more** in the results toolbar gets the next page with `OFFSET`, and adds its rows to the
@@ -63,6 +68,9 @@ In the flow:
 - The second input of a join has no row of its own in the plan. The flow shows it as a dashed box
   next to the join, with the data that the detail text gives: its alias, its index or its subquery
   table.
+- The server computes a `WITH` query one time when the statement reads it two or more times, or when
+  the query is `MATERIALIZED`. The first reader keeps the rows, and each other reader reads the kept
+  rows. *Computed once: name* marks a reader of such a query.
 - A set operation (`UNION`, `INTERSECT`, `EXCEPT`) has two operands. Each operand has its own plan,
   in a *Left operand* box and a *Right operand* box above the set operation. The boxes are side by side
   when there is space. The edge at the bottom of each box shows the rows that the operand returns. A

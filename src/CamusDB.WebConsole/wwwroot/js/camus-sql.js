@@ -13,8 +13,9 @@
  * a plain identifier, so it is colored only in that phrase (UNION ALL).
  *
  * LEFT, RIGHT, OUTER and CROSS are reserved words for LEFT [OUTER] JOIN, RIGHT [OUTER] JOIN and
- * CROSS JOIN. RETURNING is reserved too: it starts the RETURNING list of an INSERT. A column with
- * one of these names must be backticked.
+ * CROSS JOIN. RETURNING is reserved too: it starts the RETURNING list of an INSERT. USING is reserved
+ * as in PostgreSQL: it starts the relation list of DELETE … USING, the column list of JOIN … USING and
+ * the index method of CREATE INDEX … USING GIN. A column with one of these names must be backticked.
  *
  * NUMERIC and DECIMAL are one type token. `NUMERIC '1.5'` is the typed literal, so it colors as a
  * type followed by a string.
@@ -50,9 +51,9 @@
  *
  * JSONB and its alias JSON are not reserved either: a table or a column can be named json. So the two
  * words are colored as a type only where a type goes: after a column name in a column definition,
- * after '::', after AS in a CAST, and before a string in a typed literal (JSONB '{}'). The index forms
- * USING GIN, CREATE INVERTED INDEX and the operator classes jsonb_ops and jsonb_path_ops are plain
- * identifiers that the parse action checks, so they are phrases too.
+ * after '::', after AS in a CAST, and before a string in a typed literal (JSONB '{}'). The index method
+ * GIN after USING, the INVERTED of CREATE INVERTED INDEX and the operator classes jsonb_ops and
+ * jsonb_path_ops are plain identifiers that the parse action checks, so they are phrases too.
  *
  * The jsonb operators are ->, ->>, #>, #>>, #-, @>, <@, ?, ?| and ?&. '<@' is the operator only when
  * no name character follows it: `x<@p` is still `x < @p`, as in the lexer.
@@ -69,7 +70,8 @@
  * store it. So interval is colored as a type after '::' and after AS in a CAST, and never in a column
  * definition.
  *
- * AGE is a function, but age is also a common column name. So AGE is colored only when a '(' follows.
+ * AGE, DEGREES and RADIANS are functions, but age, degrees and radians are also common column names.
+ * So these three words are colored only when a '(' follows.
  *
  * Inline functions and triggers: CREATE [OR REPLACE] FUNCTION f(a INT64) RETURNS STRING LANGUAGE
  * csharp AS $$ body $$, and CREATE TRIGGER t ON tbl BEFORE INSERT LANGUAGE csharp AS $$ body $$. No
@@ -122,7 +124,7 @@
             'RETURNING', 'REVOKE', 'RIGHT', 'ROLLBACK', 'SELECT', 'SEQUENCE',
             'SEQUENCES', 'SET', 'SHOW', 'START', 'TABLE', 'TABLES',
             'THEN', 'TO', 'TRANSACTION', 'TRUE', 'TRUNCATE', 'UNION',
-            'UNIQUE', 'UPDATE', 'USER', 'VALUES', 'VIEW', 'VIEWS',
+            'UNIQUE', 'UPDATE', 'USER', 'USING', 'VALUES', 'VIEW', 'VIEWS',
             'WHEN', 'WHERE', 'WITH', 'WITHOUT',
         ],
 
@@ -172,12 +174,15 @@
         // IntervalScalarFunctions, and DATE_SUB from DateTimeScalarFunctions. AGE is registered too,
         // but it is colored only before a '(' (see the header comment), so it is not in this list.
         //
+        // SIN to ATAN2D and PI come from TrigonometricScalarFunctions. DEGREES and RADIANS are registered
+        // there too, but they are colored only before a '(', as AGE is, so they are not in this list.
+        //
         // COUNT_DISTINCT, GROUP_CONCAT, STRING_AGG and ARRAY_AGG are absent on purpose. The engine names
         // them only to reject them (AggregateFunctionCatalog.ReservedOnly). No aggregator implements them.
         builtinFunctions: [
-            'ABS', 'ARRAY_CONTAINS', 'ARRAY_LENGTH', 'AVG', 'BIT_COUNT', 'BIT_LENGTH',
+            'ABS', 'ACOS', 'ACOSD', 'ARRAY_CONTAINS', 'ASIN', 'ASIND', 'ATAN', 'ATAN2', 'ATAN2D', 'ATAND', 'ARRAY_LENGTH', 'AVG', 'BIT_COUNT', 'BIT_LENGTH',
             'CARDINALITY', 'CEIL', 'CEILING', 'CLOCK_TIMESTAMP', 'COALESCE', 'CONCAT',
-            'CONTAINS', 'CONVERT_FROM', 'CONVERT_TO', 'COSINE_DISTANCE', 'COUNT', 'CRC32',
+            'CONTAINS', 'CONVERT_FROM', 'CONVERT_TO', 'COS', 'COSD', 'COSINE_DISTANCE', 'COT', 'COTD', 'COUNT', 'CRC32',
             'CUME_DIST', 'CURRENT_DATABASE', 'CURRENT_DATE', 'CURRENT_ROLE', 'CURRENT_TIMESTAMP', 'CURRENT_USER',
             'CURRVAL', 'DATE_ADD', 'DATE_BIN', 'DATE_DIFF', 'DATE_FORMAT', 'DATE_PART', 'DATE_SUB', 'DATE_TRUNC',
             'DAY', 'DAYNAME', 'DAYOFMONTH', 'DAYOFWEEK', 'DAYOFYEAR', 'DECODE',
@@ -196,13 +201,13 @@
             'LEAD', 'LENGTH', 'LOWER', 'LTRIM', 'MAKEDATE', 'MAKE_DATE',
             'MAKE_INTERVAL', 'MAKE_TIMESTAMP', 'MAX', 'MD5', 'MIN', 'MINUTE', 'MOD',
             'MONTH', 'MONTHNAME', 'NEXTVAL', 'NOW', 'NTH_VALUE', 'NTILE',
-            'NULLIF', 'NVL', 'OCTET_LENGTH', 'PERCENT_RANK', 'POSITION', 'POW',
+            'NULLIF', 'NVL', 'OCTET_LENGTH', 'PERCENT_RANK', 'PI', 'POSITION', 'POW',
             'POWER', 'QUARTER', 'RANDOM', 'RANK', 'REGEXP_COUNT', 'REGEXP_INSTR',
             'REGEXP_LIKE', 'REGEXP_MATCH', 'REGEXP_MATCHES', 'REGEXP_REPLACE', 'REGEXP_SPLIT_TO_ARRAY', 'REGEXP_SPLIT_TO_TABLE',
             'REGEXP_SUBSTR', 'REPLACE', 'ROUND', 'ROW_NUMBER', 'RTRIM', 'SECOND',
             'SETVAL', 'SET_BIT', 'SET_BYTE', 'SHA1', 'SHA256', 'SHA512',
-            'SIGN', 'SQRT', 'STARTS_WITH', 'STATEMENT_TIMESTAMP', 'STRPOS', 'STR_ID',
-            'STR_TO_DATE', 'SUBSTR', 'SUBSTRING', 'SUM', 'SYSDATE', 'TO_BASE64', 'TO_BOOL',
+            'SIGN', 'SIN', 'SIND', 'SQRT', 'STARTS_WITH', 'STATEMENT_TIMESTAMP', 'STRPOS', 'STR_ID',
+            'STR_TO_DATE', 'SUBSTR', 'SUBSTRING', 'SUM', 'SYSDATE', 'TAN', 'TAND', 'TO_BASE64', 'TO_BOOL',
             'TO_BYTES', 'TO_CHAR', 'TO_DATE', 'TO_DATETIME', 'TO_FLOAT32', 'TO_FLOAT64',
             'TO_ID', 'TO_INT64', 'TO_JSON', 'TO_JSONB', 'TO_STRING', 'TO_TIMESTAMP',
             'TRANSACTION_TIMESTAMP', 'TRIM', 'TRUNC', 'UNHEX', 'UNIX_TIMESTAMP', 'UNIX_TIMESTAMP_MS',
@@ -453,7 +458,7 @@
                 [/(INTERVAL)(\s*)(@[A-Za-z_]\w*)(\s+)(@intervalUnit)\b/i,
                     ['keyword', 'white', 'variable.parameter', 'white', 'keyword']],
                 [/INTERVAL(?=\s*['@]|\s+\d)/i, 'keyword'],
-                [/AGE(?=\s*\()/i, 'predefined'],
+                [/(?:AGE|DEGREES|RADIANS)(?=\s*\()/i, 'predefined'],
 
                 // JSONB, JSON, BIGINT and INTERVAL, only where a type goes. See the header comment.
                 // Only JSONB has a typed literal (JSONB '{}').
@@ -670,10 +675,19 @@
     const notAlias = new Set(['WHERE', 'JOIN', 'INNER', 'LEFT', 'RIGHT', 'OUTER', 'CROSS', 'ON', 'GROUP',
         'ORDER', 'LIMIT', 'OFFSET', 'SET', 'VALUES', 'HAVING', 'AS', 'USING', 'RETURNING', 'SELECT']);
 
+    /**
+     * True for DELETE FROM … USING …, where the list after USING names tables. In other statements
+     * USING starts a join column list or an index method.
+     */
+    function usingNamesTables(statement) {
+        return /\bDELETE\s+FROM\b/i.test(statement);
+    }
+
     /** Maps each alias and each table name of the statement to its table. */
     function tableReferences(statement) {
         const refs = new Map();
-        const pattern = /\b(?:FROM|JOIN|UPDATE|INTO)\s+(`[^`]+`|[A-Za-z_][A-Za-z0-9_]*)(?:\s+(?:AS\s+)?(`[^`]+`|[A-Za-z_][A-Za-z0-9_]*))?/gi;
+        const keywords = usingNamesTables(statement) ? 'FROM|JOIN|UPDATE|INTO|USING' : 'FROM|JOIN|UPDATE|INTO';
+        const pattern = new RegExp(`\\b(?:${keywords})\\s+(\`[^\`]+\`|[A-Za-z_][A-Za-z0-9_]*)(?:\\s+(?:AS\\s+)?(\`[^\`]+\`|[A-Za-z_][A-Za-z0-9_]*))?`, 'gi');
         let match;
         while ((match = pattern.exec(statement)) !== null) {
             const table = unquote(match[1]);
@@ -684,6 +698,36 @@
                 refs.set(unquote(match[2]).toLowerCase(), table);
         }
         return refs;
+    }
+
+    /**
+     * The WITH queries of the statement: the lower-case name of each maps to its name and to the names
+     * of its column list, or to null when it has no list. The scan finds `name [(columns)] AS [[NOT]
+     * MATERIALIZED] (` after WITH or after a comma, which is enough for completion. The columns of a
+     * query with no list come from its select list, which the scan does not read.
+     */
+    function withQueries(statement) {
+        const queries = new Map();
+        const pattern = /(?:\bWITH|,)\s*(`[^`]+`|[A-Za-z_][A-Za-z0-9_]*)\s*(?:\(([^()]*)\)\s*)?AS\b\s*(?:NOT\s+)?(?:MATERIALIZED\s+)?\(/gi;
+        let match;
+        while ((match = pattern.exec(statement)) !== null) {
+            const name = unquote(match[1]);
+            if (reserved.has(name.toUpperCase()) && !match[1].startsWith('`'))
+                continue;
+            const columns = match[2] === undefined
+                ? null
+                : match[2].split(',').map(c => unquote(c.trim())).filter(c => c.length > 0);
+            queries.set(name.toLowerCase(), { name, columns });
+        }
+        return queries;
+    }
+
+    /** The columns of a WITH query of the statement, or of the table with that name. */
+    async function columnsOf(table, queries) {
+        const query = queries.get(table.toLowerCase());
+        if (query)
+            return (query.columns || []).map(name => ({ name, type: 'WITH query' }));
+        return callSource('GetColumns', table);
     }
 
     function columnItems(columns, table, range, afterBacktick, Kind, sortPrefix) {
@@ -714,32 +758,40 @@
         const before = text.slice(bounds.start, offset - word.word.length);
         const afterBacktick = before.endsWith('`');
         const refs = tableReferences(statement);
+        const queries = withQueries(statement);
 
         // `alias.` or `table.`: only the columns of that table.
         const qualified = /(`[^`]+`|[A-Za-z_][A-Za-z0-9_]*)\.`?$/.exec(before);
         if (qualified) {
             const name = unquote(qualified[1]);
             const table = refs.get(name.toLowerCase()) || name;
-            const columns = await callSource('GetColumns', table);
+            const columns = await columnsOf(table, queries);
             return { suggestions: columnItems(columns, table, range, afterBacktick, Kind, '0') };
         }
 
+        // A WITH query hides a table of the same name, so the table is not suggested again.
         const tables = await callSource('GetTables');
-        const tableItems = tables.map(t => ({
-            label: t,
+        const tableItems = [
+            ...[...queries.values()].map(q => ({ label: q.name, detail: 'WITH query' })),
+            ...tables.filter(t => !queries.has(t.toLowerCase())).map(t => ({ label: t, detail: 'table' })),
+        ].map(t => ({
+            ...t,
             kind: Kind.Class,
-            insertText: quoteName(t, afterBacktick),
-            detail: 'table',
-            sortText: '1' + t,
+            insertText: quoteName(t.label, afterBacktick),
+            sortText: '1' + t.label,
             range,
         }));
 
-        // After FROM, JOIN, INTO, UPDATE or TABLE the next word is a table name.
-        if (/\b(?:FROM|JOIN|INTO|UPDATE|TABLE|DESCRIBE|TRUNCATE)\s+`?$/i.test(before))
+        // After FROM, JOIN, INTO, UPDATE or TABLE the next word is a table name, and after the USING
+        // of a DELETE too.
+        const tableWord = usingNamesTables(statement)
+            ? /\b(?:FROM|JOIN|INTO|UPDATE|TABLE|DESCRIBE|TRUNCATE|USING)\s+`?$/i
+            : /\b(?:FROM|JOIN|INTO|UPDATE|TABLE|DESCRIBE|TRUNCATE)\s+`?$/i;
+        if (tableWord.test(before))
             return { suggestions: [...tableItems.map(t => ({ ...t, sortText: '0' + t.label })), ...keywords] };
 
         const referenced = [...new Set(refs.values())];
-        const columnLists = await Promise.all(referenced.map(t => callSource('GetColumns', t)));
+        const columnLists = await Promise.all(referenced.map(t => columnsOf(t, queries)));
         const columns = columnLists.flatMap((list, i) => columnItems(list, referenced[i], range, afterBacktick, Kind, '0'));
 
         return { suggestions: [...columns, ...tableItems, ...keywords] };
@@ -780,15 +832,9 @@
             // Not in the keyword list: INTERVAL is a keyword only before its literal. See the header
             // comment.
             { label: 'INTERVAL', kind: Kind.Keyword, insertText: 'INTERVAL' },
-            // Not in the function list: AGE is colored only before a '('. See the header comment.
-            {
-                label: 'AGE',
-                kind: Kind.Function,
-                insertText: 'AGE($0)',
-                insertTextRules: languages.CompletionItemInsertTextRule.InsertAsSnippet,
-                detail: 'CamusDB function',
-            },
-            ...definition.builtinFunctions.map(w => ({
+            // Not in the function list: AGE, DEGREES and RADIANS are colored only before a '('. See the
+            // header comment.
+            ...['AGE', 'DEGREES', 'RADIANS', ...definition.builtinFunctions].map(w => ({
                 label: w,
                 kind: Kind.Function,
                 insertText: `${w}($0)`,
