@@ -13,12 +13,13 @@ src/CamusDB.WebConsole/
                         # variables, backups
   Components/Layout/    # Main shell + theme
   Services/             # Session, schema, query execution, query plan parser, graph layout and
-                        # findings, export, preferences, SQL builder, script splitter, query
-                        # history, schema completion
+                        # findings, export, cell copy, preferences, SQL builder, script splitter,
+                        # query history, schema completion
   Models/               # Query results, query plans, schema nodes, table data context, UI preferences,
                         # query history entries
   Options/              # CamusDbOptions
-  wwwroot/js/           # camus-sql.js (Monaco language), download.js, storage.js
+  wwwroot/js/           # camus-sql.js (Monaco language), download.js, grid.js (cell selection and
+                        # copy of the results grid), storage.js
 ```
 
 ## Publish

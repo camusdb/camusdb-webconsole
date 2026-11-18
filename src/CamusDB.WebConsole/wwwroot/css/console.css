@@ -503,6 +503,22 @@ html, body {
     overflow: auto;
 }
 
+/* The grid takes the focus on a click, so that Ctrl/Cmd+C copies its cells. A mouse focus shows no
+   outline. A keyboard focus does. */
+.results-grid-wrap:focus {
+    outline: none;
+}
+
+.results-grid-wrap:focus-visible {
+    outline: 1px solid var(--camus-accent);
+    outline-offset: -1px;
+}
+
+.results-selection {
+    color: var(--camus-accent);
+    white-space: nowrap;
+}
+
 .results-view-toggle {
     margin-left: auto;
     display: inline-flex;
@@ -1801,6 +1817,16 @@ html, body {
     background: rgba(var(--camus-overlay-rgb), 0.03);
 }
 
+/* A click selects cells, not text: grid.js copies the selected cells. */
+.results-table tbody td {
+    user-select: none;
+}
+
+/* After the hover rule, with the same specificity, so that a selected cell keeps its color on hover. */
+.results-table tbody td.cell-selected {
+    background: color-mix(in srgb, var(--camus-accent) 22%, transparent);
+}
+
 .results-actions-col {
     width: 88px;
     text-align: center !important;
@@ -1830,7 +1856,7 @@ html, body {
 .results-row-menu {
     position: fixed;
     z-index: 1401;
-    min-width: 140px;
+    min-width: 200px;
     padding: 4px 0;
     background: var(--camus-surface-2);
     border: 1px solid var(--camus-border);
@@ -1839,7 +1865,10 @@ html, body {
 }
 
 .results-row-menu button {
-    display: block;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 24px;
     width: 100%;
     border: 0;
     background: transparent;
@@ -1867,6 +1896,35 @@ html, body {
     padding: 4px 14px 8px;
     font-size: 0.75rem;
     color: var(--camus-muted);
+}
+
+.results-row-menu-key {
+    font-size: 0.75rem;
+    color: var(--camus-muted);
+}
+
+.results-row-menu-sep {
+    height: 1px;
+    margin: 4px 0;
+    background: var(--camus-border);
+}
+
+/* The statements in a confirmation, such as a DROP TABLE that the editor is about to run. Each one is
+   one line, cut to the width of the dialog. Its tooltip shows all of it. */
+.confirm-items {
+    margin: 12px 0 0;
+    padding: 8px 12px;
+    list-style: none;
+    border-radius: 4px;
+    background: var(--camus-surface-2);
+    font-family: var(--camus-mono);
+    font-size: 0.8125rem;
+}
+
+.confirm-items li {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
 }
 
 .edit-record-wrap {

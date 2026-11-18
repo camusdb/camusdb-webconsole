@@ -3,6 +3,7 @@
 @inject IDialogService DialogService
 @inject IJSRuntime Js
 @inject ISnackbar Snackbar
+@implements IAsyncDisposable
 
 @if (Result is null)
 {
@@ -46,6 +47,12 @@ else
             </button>
         }
         <span>@Result.Columns.Count column@(Result.Columns.Count == 1 ? "" : "s")</span>
+        @if (SelectionBounds is { } bounds && PlanView is null or PlanViews.Table)
+        {
+            <span class="results-selection" title="Ctrl/Cmd+C copies the selection. Right-click for other formats.">
+                @SizeLabel(bounds.Bottom - bounds.Top + 1, bounds.Right - bounds.Left + 1) selected
+            </span>
+        }
         @if (Result.Columns.Count > 0 && PlanView is null or PlanViews.Table)
         {
             @if (ServerSide)
@@ -149,7 +156,11 @@ else
             </MudMenu>
         }
     </div>
-    <div class="results-grid-wrap">
+    @* grid.js finds the grid by data-grid-id. It copies only while data-has-selection is "true". *@
+    <div class="results-grid-wrap"
+         tabindex="0"
+         data-grid-id="@_gridId"
+         data-has-selection="@(SelectionBounds is null ? "false" : "true")">
         @if (Result.Columns.Count == 0)
         {
             <div class="empty-state">Empty result set (no columns).</div>
@@ -193,21 +204,25 @@ else
                     </tr>
                 </thead>
                 <tbody>
-                    <Virtualize Items="_view" Context="row" ItemSize="28">
-                        <tr class="@(ShowRowActions ? "results-row-interactive" : null)"
-                            @oncontextmenu="e => OnRowContextMenu(e, row)"
-                            @oncontextmenu:prevent="ShowRowActions">
+                    @* The items are positions in _view, so that each row knows its position for the cell selection. *@
+                    <Virtualize Items="_rowIndexes" Context="rowIndex" ItemSize="28">
+                        @{
+                            object?[] row = _view[rowIndex];
+                        }
+                        @* grid.js reads data-r and data-c to tell the server which cell a click or a right-click is on. *@
+                        <tr class="@(ShowRowActions ? "results-row-interactive" : null)" data-r="@rowIndex">
                             @for (int i = 0; i < Result.Columns.Count; i++)
                             {
                                 object? value = i < row.Length ? row[i] : null;
+                                string selected = IsSelected(rowIndex, i) ? " cell-selected" : "";
                                 @if (value is JsonbText document)
                                 {
                                     @* A document can be long. The cell shows its start, and the tooltip shows all of it. *@
-                                    <td class="cell-json"><span class="cell-json-text" title="@document.Text">@document.Text</span></td>
+                                    <td class="@("cell-json" + selected)" data-c="@i"><span class="cell-json-text" title="@document.Text">@document.Text</span></td>
                                 }
                                 else
                                 {
-                                    <td class="@CellClass(Result.Columns[i], value)">@FormatCell(value)</td>
+                                    <td class="@(CellClass(Result.Columns[i], value) + selected)" data-c="@i">@FormatCell(value)</td>
                                 }
                             }
                             @if (ShowRowActions)
@@ -244,15 +259,44 @@ else
     </div>
 }
 
-@if (_rowMenuOpen && _menuRow is not null)
+@if (_menuOpen)
 {
-    <div class="results-row-menu-backdrop" @onclick="CloseRowMenu"></div>
-    <div class="results-row-menu" style="@($"left:{_menuX}px;top:{_menuY}px")">
-        <button type="button" disabled="@(!_canMutate)" @onclick="() => EditMenuRowAsync()">Edit</button>
-        <button type="button" class="danger" disabled="@(!_canMutate)" @onclick="() => DeleteMenuRowAsync()">Delete</button>
-        @if (!_canMutate)
+    <div class="results-row-menu-backdrop"
+         @onclick="CloseRowMenu"
+         @oncontextmenu="CloseRowMenu"
+         @oncontextmenu:preventDefault="true"></div>
+    <div class="results-row-menu" role="menu" style="@_menuStyle">
+        @if (SelectionBounds is not null)
         {
-            <div class="results-row-menu-hint">Primary key required</div>
+            @* grid.js copies on a click of a data-grid-copy item, inside the click, so that the browser
+               allows the clipboard write. The Blazor handler only closes the menu. *@
+            @foreach ((string format, string label, string? keys) in CopyMenuItems)
+            {
+                <button type="button"
+                        role="menuitem"
+                        data-grid-id="@_gridId"
+                        data-grid-copy="@format"
+                        @onclick="CloseRowMenu">
+                    <span>@label</span>
+                    @if (keys is not null)
+                    {
+                        <span class="results-row-menu-key">@keys</span>
+                    }
+                </button>
+            }
+        }
+        @if (ShowRowActions && _menuRow is not null)
+        {
+            @if (SelectionBounds is not null)
+            {
+                <div class="results-row-menu-sep" role="separator"></div>
+            }
+            <button type="button" role="menuitem" disabled="@(!_canMutate)" @onclick="() => EditMenuRowAsync()">Edit row</button>
+            <button type="button" role="menuitem" class="danger" disabled="@(!_canMutate)" @onclick="() => DeleteMenuRowAsync()">Delete row</button>
+            @if (!_canMutate)
+            {
+                <div class="results-row-menu-hint">Primary key required</div>
+            }
         }
     </div>
 }
@@ -312,12 +356,41 @@ else
         (PlanViews.Graph, "Graph", Icons.Material.Filled.AccountTree, "The rows flow from the tables on the left to the result on the right"),
     ];
 
-    private bool _rowMenuOpen;
+    private static readonly (string Format, string Label, string? Keys)[] CopyMenuItems =
+    [
+        ("text", "Copy", "Ctrl/Cmd+C"),
+        ("text-headers", "Copy with headers", null),
+        ("csv", "Copy as CSV", null),
+        ("json", "Copy as JSON", null),
+        ("markdown", "Copy as Markdown", null),
+        ("sql-insert", "Copy as SQL INSERT", null),
+    ];
+
+    private bool _menuOpen;
     private object?[]? _menuRow;
-    private double _menuX;
-    private double _menuY;
+    private string _menuStyle = "";
+
+    /// <summary>A cell of the grid: a position in <see cref="_view"/> and a column index.</summary>
+    private readonly record struct CellPos(int Row, int Column);
+
+    /// <summary>The cell where the selection started. A Shift+click or a drag keeps it.</summary>
+    private CellPos? _anchor;
+
+    /// <summary>The cell where the selection ends. The selection is the rectangle between the two cells.</summary>
+    private CellPos? _focus;
+
+    /// <summary>The size of the selection that the last copy wrote, for the message after the copy.</summary>
+    private (int Rows, int Columns) _lastCopySize;
+
+    /// <summary>The name by which grid.js finds this grid. One page can hold more than one grid.</summary>
+    private readonly string _gridId = Guid.NewGuid().ToString("N");
+
+    private DotNetObjectReference<ResultsGrid>? _selfRef;
 
     private List<object?[]> _view = [];
+
+    /// <summary>0 to <c>_view.Count - 1</c>. The table renders these positions, so each row knows where it is.</summary>
+    private List<int> _rowIndexes = [];
     private QueryResultModel? _viewSource;
     private string _columnShape = "";
     private int? _sortColumn;
@@ -331,8 +404,6 @@ else
     protected override void OnParametersSet()
     {
         _canMutate = TableContext?.HasPrimaryKey == true;
-        if (!ShowRowActions)
-            CloseRowMenu();
 
         // The box shows the condition the query uses, until the user types a new one.
         if (!string.Equals(_lastServerFilter, ServerFilter, StringComparison.Ordinal))
@@ -359,7 +430,21 @@ else
         }
     }
 
+    /// <summary>
+    /// Builds the rows that the grid shows. The positions of the rows change, so the cell selection
+    /// and the menu, which point at positions, go away.
+    /// </summary>
     private void RebuildView()
+    {
+        _anchor = null;
+        _focus = null;
+        CloseRowMenu();
+
+        BuildView();
+        _rowIndexes = Enumerable.Range(0, _view.Count).ToList();
+    }
+
+    private void BuildView()
     {
         if (Result is null || !Result.IsResultSet)
         {
@@ -594,21 +679,180 @@ else
         return true;
     }
 
-    private void OnRowContextMenu(MouseEventArgs e, object?[] row)
+    /// <summary>The rows and the columns that the selection covers, or null when no cell is selected.</summary>
+    private (int Top, int Left, int Bottom, int Right)? SelectionBounds
     {
-        if (!ShowRowActions)
+        get
+        {
+            if (_anchor is not CellPos a || _focus is not CellPos f || Result is null)
+                return null;
+
+            int bottom = Math.Max(a.Row, f.Row);
+            int right = Math.Max(a.Column, f.Column);
+            if (bottom >= _view.Count || right >= Result.Columns.Count)
+                return null;
+
+            return (Math.Min(a.Row, f.Row), Math.Min(a.Column, f.Column), bottom, right);
+        }
+    }
+
+    private bool IsSelected(int row, int column) =>
+        SelectionBounds is { } b && row >= b.Top && row <= b.Bottom && column >= b.Left && column <= b.Right;
+
+    private bool IsCell(int row, int column) =>
+        Result is not null && row >= 0 && row < _view.Count && column >= 0 && column < Result.Columns.Count;
+
+    private static string SizeLabel(int rows, int columns) =>
+        rows == 1 && columns == 1
+            ? "1 cell"
+            : $"{rows:N0} row{(rows == 1 ? "" : "s")} × {columns:N0} column{(columns == 1 ? "" : "s")}";
+
+    /// <summary>
+    /// A click selects one cell. A Shift+click, and each cell that a drag passes over, moves the end of
+    /// the selection and keeps its start.
+    /// </summary>
+    [JSInvokable]
+    public void SelectCell(int row, int column, bool extend)
+    {
+        if (!IsCell(row, column))
             return;
 
-        _menuRow = row;
-        _menuX = e.ClientX;
-        _menuY = e.ClientY;
-        _rowMenuOpen = true;
+        CellPos cell = new(row, column);
+        if (!extend || _anchor is null)
+            _anchor = cell;
+        _focus = cell;
+        StateHasChanged();
+    }
+
+    /// <summary>Ctrl/Cmd+A selects each cell of the rows that the grid holds.</summary>
+    [JSInvokable]
+    public void SelectAll()
+    {
+        if (Result is null || _view.Count == 0 || Result.Columns.Count == 0)
+            return;
+
+        _anchor = new CellPos(0, 0);
+        _focus = new CellPos(_view.Count - 1, Result.Columns.Count - 1);
+        StateHasChanged();
+    }
+
+    /// <summary>Escape closes the menu, or else removes the selection.</summary>
+    [JSInvokable]
+    public void Escape()
+    {
+        if (_menuOpen)
+            CloseRowMenu();
+        else
+        {
+            _anchor = null;
+            _focus = null;
+        }
+
+        StateHasChanged();
+    }
+
+    /// <summary>
+    /// A right-click on a row. A right-click on a cell outside the selection selects that cell first,
+    /// so the copy items apply to the cell under the pointer. The column is -1 on the actions column.
+    /// The menu opens on the side of the pointer where the window has space for it.
+    /// </summary>
+    [JSInvokable]
+    public void OpenMenu(int row, int column, double x, double y, double viewportWidth, double viewportHeight)
+    {
+        if (IsCell(row, column) && !IsSelected(row, column))
+        {
+            _anchor = new CellPos(row, column);
+            _focus = _anchor;
+        }
+
+        _menuRow = ShowRowActions && row >= 0 && row < _view.Count ? _view[row] : null;
+        if (SelectionBounds is null && _menuRow is null)
+            return;
+
+        string horizontal = x > viewportWidth - 240
+            ? $"right:{Px(viewportWidth - x)}"
+            : $"left:{Px(x)}";
+        string vertical = y > viewportHeight / 2
+            ? $"bottom:{Px(viewportHeight - y)}"
+            : $"top:{Px(y)}";
+        _menuStyle = horizontal + ";" + vertical;
+        _menuOpen = true;
+        StateHasChanged();
+
+        static string Px(double value) =>
+            Math.Max(0, value).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture) + "px";
+    }
+
+    /// <summary>
+    /// The text of the selection in one of the copy formats (see <see cref="GridCopy.TryParseFormat"/>).
+    /// grid.js asks for it inside the click or the key press, and writes it to the clipboard.
+    /// </summary>
+    [JSInvokable]
+    public string GetCopyText(string format)
+    {
+        if (Result is null || !GridCopy.TryParseFormat(format, out CopyFormat copyFormat) || SelectionBounds is not { } b)
+            throw new InvalidOperationException("No cells are selected.");
+
+        List<QueryColumn> columns = Result.Columns.Skip(b.Left).Take(b.Right - b.Left + 1).ToList();
+        List<object?[]> rows = new(b.Bottom - b.Top + 1);
+        for (int r = b.Top; r <= b.Bottom; r++)
+        {
+            object?[] source = _view[r];
+            object?[] cells = new object?[columns.Count];
+            for (int c = 0; c < cells.Length; c++)
+                cells[c] = b.Left + c < source.Length ? source[b.Left + c] : null;
+            rows.Add(cells);
+        }
+
+        _lastCopySize = (rows.Count, columns.Count);
+        return GridCopy.Format(columns, rows, copyFormat, TableContext?.Table);
+    }
+
+    /// <summary>grid.js reports the end of the clipboard write.</summary>
+    [JSInvokable]
+    public void CopyFinished(string format, bool success, string? error)
+    {
+        if (success)
+        {
+            GridCopy.TryParseFormat(format, out CopyFormat copyFormat);
+            Snackbar.Add($"Copied {SizeLabel(_lastCopySize.Rows, _lastCopySize.Columns)}{GridCopy.Describe(copyFormat)}.", Severity.Success);
+        }
+        else
+        {
+            Snackbar.Add($"Could not copy: {error ?? "the browser refused access to the clipboard."}", Severity.Error);
+        }
     }
 
     private void CloseRowMenu()
     {
-        _rowMenuOpen = false;
+        _menuOpen = false;
         _menuRow = null;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+            return;
+
+        _selfRef = DotNetObjectReference.Create(this);
+        await Js.InvokeVoidAsync("camusGrid.register", _gridId, _selfRef);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_selfRef is null)
+            return;
+
+        try
+        {
+            await Js.InvokeVoidAsync("camusGrid.unregister", _gridId);
+        }
+        catch (JSDisconnectedException)
+        {
+            // The circuit is gone, and the page with it.
+        }
+
+        _selfRef.Dispose();
     }
 
     /// <summary>The choice is a preference, not a property of one result, so the next EXPLAIN opens the same way.</summary>
@@ -727,21 +971,7 @@ else
         return pk;
     }
 
-    private static string FormatCell(object? value)
-    {
-        if (value is null)
-            return "NULL";
-
-        return value switch
-        {
-            DateTime dt => dt.ToString("yyyy-MM-dd HH:mm:ss.fff"),
-            DateOnly d => d.ToString("yyyy-MM-dd"),
-            byte[] bytes => $"0x{Convert.ToHexString(bytes)}",
-            bool b => b ? "true" : "false",
-            Array arr => $"[{string.Join(", ", arr.Cast<object?>().Select(FormatCell))}]",
-            _ => Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture) ?? "",
-        };
-    }
+    private static string FormatCell(object? value) => CellText.Format(value);
 
     private static string CellClass(QueryColumn column, object? value)
     {

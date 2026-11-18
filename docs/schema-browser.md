@@ -127,7 +127,8 @@ All rename items open one dialog. It shows the statement before it runs:
 ## Edit rows
 
 *Edit/View Data* opens a data tab. It runs `SELECT *` and attaches the table's schema to the result.
-This gives each row an **Edit** and a **Delete** action, also on a right-click of the row. The tab
+This gives each row an **Edit** and a **Delete** action. They are also in the menu of a right-click on
+the row, as *Edit row* and *Delete row*. The tab
 pages through the table, and it sorts and filters on the server (see
 [Results](results.md#sort-and-filter)).
 

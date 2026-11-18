@@ -44,6 +44,40 @@ sort. A `NUMERIC` sorts by its exact value. `NULL` comes first.
 | Query tab | The rows that the grid holds. The filter box is **Filter loaded rows**. To include all rows, fetch more rows first |
 | Data tab (*Edit/View Data*) | The whole table, on the server. A header click adds `ORDER BY`. The **WHERE** box takes a SQL condition (press Enter). The console writes the new query into the tab's editor, so you always see the SQL. A condition with `;` is refused |
 
+## Select and copy cells
+
+Click a cell to select it. To select a rectangle of cells, Shift+click the opposite corner, or drag
+over the cells. **Ctrl/Cmd+A** selects all the rows that the grid holds. **Esc** removes the
+selection. The toolbar shows the size of the selection.
+
+**Ctrl/Cmd+C** copies the selection as tab-separated text, without the column names. A spreadsheet
+pastes this text as cells. One cell copies as its text only, without quotes.
+
+Right-click a cell for the other formats. If the cell is not in the selection, the right-click selects
+it first.
+
+| Item | Writes |
+| --- | --- |
+| *Copy* | Tab-separated text, the same as Ctrl/Cmd+C |
+| *Copy with headers* | Tab-separated text, with the column names on the first line |
+| *Copy as CSV* | CSV with a header line, as **Export** writes it |
+| *Copy as JSON* | An array of objects, as **Export** writes it |
+| *Copy as Markdown* | A Markdown table |
+| *Copy as SQL INSERT* | One `INSERT` for each row. In a data tab, the statement names the table. For other results, it names `table_name` |
+
+- Tab-separated text and Markdown hold the text that the grid shows. So `NULL` copies as `NULL`, and
+  a blob copies as `0x…`. CSV and JSON follow the export rules: SQL `NULL` is an empty CSV field and a
+  JSON `null`.
+- A copy can hold rows that are not on the screen, but only the rows that the grid holds. To copy more
+  rows, click **Fetch more** first.
+- A sort, a filter or **Fetch more** removes the selection, because the rows change position.
+- A click selects cells, not text. To copy part of the text of a cell, copy the cell and edit the
+  text after you paste it.
+- On a page that is not `https` and not `localhost`, the browser has no clipboard API. The console
+  then uses an older copy method that most browsers still allow.
+- In a data tab, the menu also has *Edit row* and *Delete row* (see
+  [Edit rows](schema-browser.md#edit-rows)).
+
 ## Query plans
 
 The result of `EXPLAIN`, `EXPLAIN (LOGICAL)`, `EXPLAIN (PHYSICAL)` or `EXPLAIN (ANALYZE)` gets a

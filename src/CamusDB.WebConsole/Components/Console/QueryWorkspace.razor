@@ -443,6 +443,11 @@
             return;
         }
 
+        // A programmatic run executes SQL that the console wrote, a SELECT, so only a run that the user
+        // started can hold a statement to confirm.
+        if (mode != RunMode.Tab && !await ConfirmDestructiveAsync(statements))
+            return;
+
         // The title names the tab, so keep it on the tab's own SQL rather than the selected fragment.
         if (tab.DataContext is null && selected is null)
             tab.Title = TruncateTitle(tabSql);
@@ -514,6 +519,45 @@
 
         if (databaseListChanged || changedDatabases.Count > 0)
             SchemaChanges.Notify(new SchemaChange { DatabaseList = databaseListChanged, Databases = changedDatabases });
+    }
+
+    /// <summary>
+    /// Asks before a run that holds a DROP TABLE, a DROP DATABASE or a TRUNCATE. One dialog lists each
+    /// such statement of the run, so a script asks once. True when the run can go on.
+    /// </summary>
+    private async Task<bool> ConfirmDestructiveAsync(List<string> statements)
+    {
+        List<string> destructive = statements.Where(SqlScript.NeedsConfirmation).ToList();
+        if (destructive.Count == 0)
+            return true;
+
+        string message = statements.Count == 1
+            ? "This statement removes data permanently. Run it?"
+            : $"{destructive.Count} of the {statements.Count} statements remove data permanently. Run the script?";
+
+        var parameters = new DialogParameters<ConfirmDialog>
+        {
+            { x => x.Message, message },
+            { x => x.Items, destructive.Select(OneLine).ToList() },
+            { x => x.ConfirmText, statements.Count == 1 ? "Run" : "Run script" },
+            { x => x.ConfirmColor, Color.Error },
+        };
+
+        var options = new DialogOptions
+        {
+            CloseOnEscapeKey = true,
+            MaxWidth = MaxWidth.Small,
+            FullWidth = true,
+        };
+
+        IDialogReference dialog = await DialogService.ShowAsync<ConfirmDialog>("Remove data?", parameters, options);
+        DialogResult? result = await dialog.Result;
+        return result is { Canceled: false };
+
+        // The dialog shows each statement on one line, which CSS cuts to the width of the dialog. The
+        // line's tooltip shows all of it.
+        static string OneLine(string sql) =>
+            string.Join(' ', sql.Split((char[])['\r', '\n', '\t'], StringSplitOptions.RemoveEmptyEntries)).Trim();
     }
 
     private Task RefreshActiveDataAsync() => RunCoreAsync(RunMode.Tab);

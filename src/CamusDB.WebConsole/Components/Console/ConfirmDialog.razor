@@ -1,6 +1,15 @@
 <MudDialog>
     <DialogContent>
         <MudText>@Message</MudText>
+        @if (Items is { Count: > 0 })
+        {
+            <ul class="confirm-items">
+                @foreach (string item in Items)
+                {
+                    <li title="@item">@item</li>
+                }
+            </ul>
+        }
     </DialogContent>
     <DialogActions>
         <MudButton OnClick="Cancel">@CancelText</MudButton>
@@ -18,6 +27,10 @@
 
     [Parameter]
     public string Message { get; set; } = "Are you sure?";
+
+    /// <summary>Lines to show below the message, in a monospace font, such as the statements that a run holds.</summary>
+    [Parameter]
+    public IReadOnlyList<string>? Items { get; set; }
 
     [Parameter]
     public string ConfirmText { get; set; } = "Confirm";

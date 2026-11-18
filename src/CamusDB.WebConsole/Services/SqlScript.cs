@@ -256,6 +256,26 @@ public static class SqlScript
         };
     }
 
+    /// <summary>
+    /// True for a statement that the editor confirms before it runs: <c>DROP TABLE</c>,
+    /// <c>DROP DATABASE</c> and <c>TRUNCATE</c>. Each one removes rows, and no statement brings them
+    /// back. The words can follow comments, and <c>IF EXISTS</c> comes after them, so the first two
+    /// words decide.
+    /// </summary>
+    public static bool NeedsConfirmation(string sql)
+    {
+        List<string> words = LeadingWords(sql, 2);
+        if (words.Count == 0)
+            return false;
+
+        return words[0] switch
+        {
+            "TRUNCATE" => true,
+            "DROP" => words.Count > 1 && words[1] is "TABLE" or "DATABASE",
+            _ => false,
+        };
+    }
+
     /// <summary>The first words of the statement, upper case, up to the first token that is not a word.</summary>
     private static List<string> LeadingWords(string sql, int count)
     {

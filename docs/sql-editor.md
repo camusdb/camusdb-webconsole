@@ -14,6 +14,9 @@ has its own title, timing and cancellable run.
   next statement.
 - When the console runs a tab again by itself, it runs the tab's own SQL. For example, a data tab runs
   its SQL again after a row edit.
+- Before a run that has a `DROP TABLE`, a `DROP DATABASE` or a `TRUNCATE`, the console asks for
+  confirmation. The dialog lists each of these statements. A script asks one time, before its first
+  statement runs. If you cancel, no statement runs.
 
 ## Scripts
 
