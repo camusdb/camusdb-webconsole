@@ -47,27 +47,36 @@ sort. A `NUMERIC` sorts by its exact value. `NULL` comes first.
 ## Query plans
 
 The result of `EXPLAIN`, `EXPLAIN (LOGICAL)`, `EXPLAIN (PHYSICAL)` or `EXPLAIN (ANALYZE)` gets a
-**Table | Flow** switch in the results toolbar.
+**Table | Steps | Graph** switch in the results toolbar.
 
 - *Table* shows the plan rows in the grid.
-- *Flow* shows the plan as a diagram from top to bottom. The source operator is first. Each operator is
+- *Steps* shows the plan as cards from top to bottom. The source operator is first. Each operator is
   below the operator that feeds it. The result is last.
+- *Graph* shows the plan as a diagram from left to right. The tables are on the left, and the rows flow
+  as bands to the result on the right.
 
 The console remembers the last choice, and opens the next plan in the same view.
 
-In the flow:
+The server sends a `depth` column with each operator row: the level of the operator in the plan tree.
+The console uses it to find which operator reads which. An older server sends no `depth` column. Then
+the console reads the tree from the order of the rows. That works for each plan shape that an older
+server sends.
+
+### Steps
 
 - Each operator is a card. It shows the operator family, a one-line description, the server's detail
   text, and the table or index that it reads. The families are source, join, filter, aggregate, sort,
-  window, limit, output and set operation. A `gin-scan` is a source that reads a GIN index (an index
-  on the contents of a `JSONB` column).
+  window, limit, output, set operation and lock. A `gin-scan` is a source that reads a GIN index (an
+  index on the contents of a `JSONB` column).
 - An edge shows the rows that its upper operator returns: the estimate, and with `ANALYZE` the
   measured count. A larger row count gives a thicker edge.
 - A bar shows the part of the plan's estimated cost that each operator has. *Highest cost* marks the
   operator with the largest cost.
-- The second input of a join has no row of its own in the plan. The flow shows it as a dashed box
-  next to the join, with the data that the detail text gives: its alias, its index or its subquery
-  table.
+- The second input of a join usually has no row of its own in the plan. The flow shows it as a dashed
+  box next to the join, with the data that the detail text gives: its alias, its index, its subquery
+  table, or `LATERAL`.
+- A derived table or a `WITH` query on the right side of a join has a plan of its own. The join then
+  gets a *Left input* box and a *Right input* box above it, each with its own flow.
 - The server computes a `WITH` query one time when the statement reads it two or more times, or when
   the query is `MATERIALIZED`. The first reader keeps the rows, and each other reader reads the kept
   rows. *Computed once: name* marks a reader of such a query.
@@ -75,10 +84,53 @@ In the flow:
   in a *Left operand* box and a *Right operand* box above the set operation. The boxes are side by side
   when there is space. The edge at the bottom of each box shows the rows that the operand returns. A
   nested set operation shows its operand boxes inside the box of its own operand.
+- The `recursive-union` of `WITH RECURSIVE` has a *Non-recursive term* box and a *Recursive term* box.
 - With `ANALYZE`, a card also shows the rows read, the KV lookups and the scan entries. The summary
-  shows the measured time. *Estimate off N×* marks an operator whose measured rows are more than ten
-  times the estimate, or less than a tenth of it.
+  shows the measured time and the planning time. *Estimate off N×* marks an operator whose measured
+  rows are more than ten times the estimate, or less than a tenth of it.
 - The rows about the whole plan (`plan-info`, `distribution`, `cache`) are below the diagram.
+
+### Graph
+
+- Each operator is a colored bar. The color is the operator family. The operator name and its table
+  or index are above the bar. Below the bar is the measured time (where the server gives one) or the
+  part of the estimated cost.
+- A band carries the rows from one operator to the next. Its width follows the row count on a log
+  scale: 20 rows are about 2 px wide, and 12 million rows about 29 px. The label shows the measured
+  count with `ANALYZE`, else the estimate. When an operator has two inputs, the label also says which
+  input the band is, such as `left`, `right` or `recursive`.
+- When the measured rows and the estimate are ten times apart or more, two dashed lines show the
+  estimate's width on the band, and the label shows both counts.
+- A red band that drops below a bar shows the rows that the operator read and did not pass on: a scan
+  whose filter dropped more than half of the rows it read, or a filter that dropped more than half of
+  its input.
+- A dashed bar is the second input of a join that has no row of its own in the plan.
+- *Fit* shrinks a wide diagram to the pane, down to 80% of its size. A larger diagram scrolls.
+  *100%* shows the diagram at its full size.
+
+Click an operator, or select it with Tab and press Enter, to show it in the inspector next to the
+diagram. The inspector shows the description, the row counts, the counters, the cost, the detail text
+as pairs of keys and values, and the spans of a gather. With `ANALYZE` it also shows:
+
+- the measured rows and the estimate on a log ruler from 1 to a billion
+- how the planner made the estimate (the `estimate_trace` column), when the server sends it
+
+The server runs a filter inside the scan right under it. So with `ANALYZE` the scan's rows are the rows
+that pass the filter, and its estimate is for the rows it read. The console compares the estimate of
+such a scan with its rows read.
+
+*Findings* above the inspector lists the facts in the plan that are worth attention. A number on the
+diagram marks the operator of each of the first three. Click a finding to select its operator. The
+console finds:
+
+| Finding | When |
+| --- | --- |
+| *Hash join spilled to disk*, *Hash join fell back to a nested loop*, *Right side read for each left row* | The join's detail shows `ran=grace-hash`, `ran=nested-loop-fallback` or `ran=nested-loop-rescan` (`ANALYZE` only) |
+| *Window spilled to disk* | The window's detail shows `spilled=` above 0 (`ANALYZE` only) |
+| *Full scan of table* | A `table-scan` reads 10,000 rows or more and keeps 20% of them or less |
+| *Estimate off N×* | The measured rows and the estimate are ten times apart or more, on 100 rows or more |
+| *Nested loop without an index* | A `nested-loop-join` with no index, range seek or IN list for its right side reads 1,000 left rows or more |
+| *Most of the cost* | One operator has half of the estimated cost or more |
 
 ## Export
 

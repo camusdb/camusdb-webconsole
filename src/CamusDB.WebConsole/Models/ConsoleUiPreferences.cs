@@ -17,8 +17,21 @@ public sealed class ConsoleUiPreferences
     /// </summary>
     public string? User { get; set; }
 
-    /// <summary>True when an EXPLAIN result opens as a flow diagram instead of the grid.</summary>
+    /// <summary>
+    /// How an EXPLAIN result opens: <c>table</c>, <c>steps</c> or <c>graph</c>. Null until the visitor
+    /// picks one; then <see cref="PlanAsFlow"/> from an older console still decides.
+    /// </summary>
+    public string? PlanView { get; set; }
+
+    /// <summary>The choice of an older console: true opened a plan as the step flow. Read only when <see cref="PlanView"/> is null.</summary>
     public bool PlanAsFlow { get; set; }
+
+    /// <summary>The view that an EXPLAIN result opens in.</summary>
+    public string EffectivePlanView => PlanView switch
+    {
+        PlanViews.Table or PlanViews.Steps or PlanViews.Graph => PlanView,
+        _ => PlanAsFlow ? PlanViews.Steps : PlanViews.Table,
+    };
 
     public string? ActiveTabId { get; set; }
 
@@ -34,4 +47,12 @@ public sealed class PersistedQueryTab
     public string Title { get; set; } = "SQL";
 
     public string Sql { get; set; } = "";
+}
+
+/// <summary>The views of an EXPLAIN result in the results toolbar.</summary>
+public static class PlanViews
+{
+    public const string Table = "table";
+    public const string Steps = "steps";
+    public const string Graph = "graph";
 }

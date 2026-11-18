@@ -46,7 +46,7 @@ else
             </button>
         }
         <span>@Result.Columns.Count column@(Result.Columns.Count == 1 ? "" : "s")</span>
-        @if (Result.Columns.Count > 0 && !ShowFlow)
+        @if (Result.Columns.Count > 0 && PlanView is null or PlanViews.Table)
         {
             @if (ServerSide)
             {
@@ -86,20 +86,18 @@ else
         @if (Result.Plan is not null)
         {
             <div class="results-view-toggle" role="group" aria-label="Show the plan as">
-                <button type="button"
-                        class="@(ShowFlow ? null : "active")"
-                        aria-pressed="@(ShowFlow ? "false" : "true")"
-                        @onclick="() => SetFlowAsync(false)">
-                    <MudIcon Icon="@Icons.Material.Filled.TableRows" Size="Size.Small" />
-                    Table
-                </button>
-                <button type="button"
-                        class="@(ShowFlow ? "active" : null)"
-                        aria-pressed="@(ShowFlow ? "true" : "false")"
-                        @onclick="() => SetFlowAsync(true)">
-                    <MudIcon Icon="@Icons.Material.Filled.AccountTree" Size="Size.Small" />
-                    Flow
-                </button>
+                @foreach ((string view, string label, string icon, string hint) in PlanViewButtons)
+                {
+                    bool active = PlanView == view;
+                    <button type="button"
+                            class="@(active ? "active" : null)"
+                            aria-pressed="@(active ? "true" : "false")"
+                            title="@hint"
+                            @onclick="() => SetPlanViewAsync(view)">
+                        <MudIcon Icon="@icon" Size="Size.Small" />
+                        @label
+                    </button>
+                }
             </div>
         }
         @if (TableContext is not null)
@@ -156,9 +154,13 @@ else
         {
             <div class="empty-state">Empty result set (no columns).</div>
         }
-        else if (ShowFlow)
+        else if (PlanView == PlanViews.Steps)
         {
             <QueryPlanFlow Plan="Result.Plan!" />
+        }
+        else if (PlanView == PlanViews.Graph)
+        {
+            <QueryPlanGraph Plan="Result.Plan!" />
         }
         else
         {
@@ -300,7 +302,15 @@ else
     private bool ShowRowActions => TableContext is not null;
     private bool _canMutate;
 
-    private bool ShowFlow => Result?.Plan is not null && Prefs.Current.PlanAsFlow;
+    /// <summary>The view of a plan result: <c>table</c>, <c>steps</c> or <c>graph</c>. Null for a result that is not a plan.</summary>
+    private string? PlanView => Result?.Plan is null ? null : Prefs.Current.EffectivePlanView;
+
+    private static readonly (string View, string Label, string Icon, string Hint)[] PlanViewButtons =
+    [
+        (PlanViews.Table, "Table", Icons.Material.Filled.TableRows, "The plan rows as the server returns them"),
+        (PlanViews.Steps, "Steps", Icons.Material.Filled.ViewAgenda, "One card for each operator, from the source down to the result"),
+        (PlanViews.Graph, "Graph", Icons.Material.Filled.AccountTree, "The rows flow from the tables on the left to the result on the right"),
+    ];
 
     private bool _rowMenuOpen;
     private object?[]? _menuRow;
@@ -602,7 +612,7 @@ else
     }
 
     /// <summary>The choice is a preference, not a property of one result, so the next EXPLAIN opens the same way.</summary>
-    private Task SetFlowAsync(bool asFlow) => Prefs.SetPlanAsFlowAsync(asFlow);
+    private Task SetPlanViewAsync(string view) => Prefs.SetPlanViewAsync(view);
 
     private async Task EditMenuRowAsync()
     {

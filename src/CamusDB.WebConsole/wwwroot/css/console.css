@@ -30,6 +30,7 @@
     --camus-kind-limit: #aed581;
     --camus-kind-exchange: #ff8a65;
     --camus-kind-setop: #ffd54f;
+    --camus-kind-lock: #f06292;
     --camus-font: "IBM Plex Sans", "Segoe UI", sans-serif;
     --camus-mono: "IBM Plex Mono", "SFMono-Regular", Menlo, Consolas, monospace;
 }
@@ -63,6 +64,7 @@
     --camus-kind-limit: #4f7f1f;
     --camus-kind-exchange: #d84315;
     --camus-kind-setop: #8a6d00;
+    --camus-kind-lock: #ad1457;
 }
 
 html, body {
@@ -856,6 +858,7 @@ html, body {
 .plan-step.kind-project { --plan-kind: var(--camus-green); }
 .plan-step.kind-exchange { --plan-kind: var(--camus-kind-exchange); }
 .plan-step.kind-setoperation { --plan-kind: var(--camus-kind-setop); }
+.plan-step.kind-lock { --plan-kind: var(--camus-kind-lock); }
 
 /* A chain with a set operation is wider, so its operand boxes can sit side by side. Its own steps
    keep the width of a chain without one. */
@@ -884,6 +887,16 @@ html, body {
     grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
     gap: 12px;
     --plan-kind: var(--camus-kind-setop);
+}
+
+/* The inputs of a join whose right input has a plan of its own. */
+.plan-branches.plan-inputs {
+    --plan-kind: var(--camus-kind-join);
+}
+
+.plan-inputs .plan-operand-title + .plan-side-detail {
+    margin-bottom: 4px;
+    color: var(--camus-muted);
 }
 
 .plan-operand {
@@ -1160,6 +1173,580 @@ html, body {
     margin: 0;
     font-family: var(--camus-mono);
     overflow-wrap: anywhere;
+}
+
+/* Query plan graph. The diagram is inline SVG that the server lays out (QueryPlanGraphLayout): every
+   color comes from a theme token through --k, the color of the node's family. */
+.pg-wrap {
+    padding: 12px 16px 28px;
+    container-type: inline-size;
+}
+
+.pg-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 16px;
+    margin-bottom: 10px;
+    font-size: 0.8125rem;
+    color: var(--camus-muted);
+}
+
+.pg-header strong {
+    color: var(--camus-text);
+    font-weight: 500;
+}
+
+.pg-legend {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 2px 10px;
+    font-size: 0.75rem;
+}
+
+.pg-legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.pg-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
+    background: var(--k);
+}
+
+.pg-zoom {
+    margin-left: auto;
+    display: inline-flex;
+    border: 1px solid var(--camus-border);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.pg-zoom button {
+    padding: 1px 10px;
+    border: 0;
+    background: transparent;
+    color: var(--camus-muted);
+    font: inherit;
+    font-size: 0.75rem;
+    cursor: pointer;
+}
+
+.pg-zoom button + button {
+    border-left: 1px solid var(--camus-border);
+}
+
+.pg-zoom button:hover {
+    color: var(--camus-text);
+}
+
+.pg-zoom button.active {
+    background: color-mix(in srgb, var(--camus-green) 12%, transparent);
+    color: var(--camus-green);
+}
+
+.pg-body {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 340px;
+    gap: 14px;
+    align-items: start;
+}
+
+@container (max-width: 900px) {
+    .pg-body {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+
+.pg-canvas {
+    overflow: auto;
+    border: 1px solid var(--camus-border);
+    border-radius: 8px;
+    background:
+        radial-gradient(circle, color-mix(in srgb, var(--camus-muted) 18%, transparent) 1px, transparent 1px) 0 0 / 18px 18px,
+        var(--camus-surface);
+}
+
+.pg-svg {
+    display: block;
+    font-family: var(--camus-mono);
+}
+
+/* Fit shrinks a wide diagram to the pane, down to 80% of its size, and never grows a small one. A
+   diagram that needs more than that scrolls, so its text stays legible. */
+.pg-canvas.fit .pg-svg {
+    max-width: 100%;
+    min-width: var(--pg-min-width);
+    height: auto;
+}
+
+.pg-band {
+    fill: none;
+    stroke-linecap: butt;
+    stroke-opacity: 0.55;
+    transition: stroke-opacity 120ms ease;
+}
+
+.pg-edge:hover .pg-band,
+.pg-edge.linked .pg-band {
+    stroke-opacity: 0.9;
+}
+
+.pg-band-ghost {
+    fill: none;
+    stroke: var(--camus-plan-edge);
+    stroke-width: 1.5;
+    stroke-dasharray: 4 4;
+}
+
+.pg-estimate {
+    fill: none;
+    stroke: var(--camus-warn);
+    stroke-width: 1;
+    stroke-dasharray: 3 3;
+    pointer-events: none;
+}
+
+.pg-pill {
+    fill: var(--camus-surface);
+    stroke: var(--camus-border);
+}
+
+.pg-pill-text {
+    fill: var(--camus-text);
+    font-size: 10.5px;
+}
+
+.pg-pill-group.warn .pg-pill {
+    stroke: var(--camus-warn);
+}
+
+.pg-pill-group.warn .pg-pill-text {
+    fill: var(--camus-warn);
+}
+
+.pg-drain path {
+    fill: none;
+    stroke-linecap: butt;
+}
+
+.pg-drain-start {
+    stop-color: var(--camus-danger);
+    stop-opacity: 0.75;
+}
+
+.pg-drain-end {
+    stop-color: var(--camus-danger);
+    stop-opacity: 0;
+}
+
+.pg-drain text {
+    fill: var(--camus-danger);
+    font-size: 10.5px;
+}
+
+.pg-node {
+    cursor: pointer;
+    outline: none;
+}
+
+.pg-hit {
+    fill: transparent;
+}
+
+.pg-halo {
+    fill: none;
+    stroke: var(--camus-accent);
+    stroke-width: 2;
+    opacity: 0;
+}
+
+.pg-node:hover .pg-halo {
+    opacity: 0.35;
+}
+
+.pg-node.selected .pg-halo,
+.pg-node:focus-visible .pg-halo {
+    opacity: 1;
+}
+
+.pg-bar {
+    fill: var(--k);
+}
+
+.pg-ghost-bar {
+    fill: color-mix(in srgb, var(--k) 12%, transparent);
+    stroke: var(--k);
+    stroke-dasharray: 3 2;
+}
+
+.pg-name {
+    fill: var(--camus-text);
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.pg-node.ghost .pg-name {
+    fill: var(--camus-muted);
+    font-style: italic;
+    font-weight: 500;
+}
+
+.pg-node.hot .pg-name,
+.pg-node.hot .pg-metric {
+    fill: var(--camus-danger);
+}
+
+.pg-node.hot .pg-metric {
+    font-weight: 600;
+}
+
+.pg-target {
+    fill: var(--k);
+    font-size: 11px;
+}
+
+.pg-metric {
+    fill: var(--camus-muted);
+    font-size: 11px;
+}
+
+.pg-badge {
+    fill: var(--camus-danger);
+}
+
+.pg-badge-text {
+    fill: #fff;
+    font-size: 10px;
+    font-weight: 700;
+}
+
+.pg-result {
+    cursor: default;
+}
+
+.pg-result-pill {
+    fill: color-mix(in srgb, var(--camus-green) 14%, transparent);
+    stroke: var(--camus-green-dim);
+}
+
+.pg-result-text {
+    fill: var(--camus-green);
+    font-family: var(--camus-font);
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.pg-side {
+    position: sticky;
+    top: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-width: 0;
+}
+
+.pg-side h3 {
+    margin: 0 0 8px;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--camus-muted);
+}
+
+.pg-findings,
+.pg-inspector {
+    padding: 10px 12px;
+    background: var(--camus-surface);
+    border: 1px solid var(--camus-border);
+    border-radius: 8px;
+}
+
+.pg-findings ol {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.pg-empty {
+    margin: 0;
+    font-size: 0.8125rem;
+    color: var(--camus-muted);
+}
+
+.pg-finding {
+    display: flex;
+    gap: 8px;
+    width: 100%;
+    padding: 6px 8px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--camus-text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    --f: var(--camus-accent);
+}
+
+.pg-finding.warning { --f: var(--camus-danger); }
+.pg-finding.notice { --f: var(--camus-warn); }
+
+.pg-finding:hover {
+    background: rgba(var(--camus-overlay-rgb), 0.04);
+}
+
+.pg-finding.active {
+    border-color: color-mix(in srgb, var(--f) 45%, transparent);
+    background: color-mix(in srgb, var(--f) 8%, transparent);
+}
+
+.pg-finding-num {
+    flex-shrink: 0;
+    display: inline-grid;
+    place-items: center;
+    width: 18px;
+    height: 18px;
+    margin-top: 1px;
+    border-radius: 50%;
+    background: var(--f);
+    color: var(--camus-bg);
+    font-size: 0.6875rem;
+    font-weight: 700;
+}
+
+.pg-finding-body {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    font-size: 0.75rem;
+    color: var(--camus-muted);
+}
+
+.pg-finding-body strong {
+    color: var(--camus-text);
+    font-size: 0.8125rem;
+    font-weight: 600;
+}
+
+.pg-more {
+    margin-top: 6px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--camus-accent);
+    font: inherit;
+    font-size: 0.75rem;
+    cursor: pointer;
+}
+
+.pg-inspector {
+    border-top: 3px solid var(--k);
+}
+
+.pg-insp-kind {
+    color: var(--k);
+    font-size: 0.6875rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.pg-insp-title {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 8px;
+    margin-top: 2px;
+}
+
+.pg-insp-target {
+    padding: 1px 8px;
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--k) 15%, transparent);
+    color: var(--k);
+    font-family: var(--camus-mono);
+    font-size: 0.75rem;
+    overflow-wrap: anywhere;
+}
+
+.pg-insp-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 6px;
+}
+
+.pg-inspector .plan-desc {
+    margin: 6px 0 0;
+}
+
+.pg-inspector h4 {
+    margin: 12px 0 4px;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--camus-muted);
+}
+
+.pg-insp-hint {
+    margin: 8px 0 4px;
+    font-size: 0.75rem;
+    color: var(--camus-muted);
+}
+
+.pg-insp-note {
+    margin: 0;
+    font-family: var(--camus-mono);
+    font-size: 0.75rem;
+    overflow-wrap: anywhere;
+}
+
+.pg-stats {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px 12px;
+    margin: 10px 0 0;
+}
+
+.pg-stats dt {
+    font-size: 0.6875rem;
+    color: var(--camus-muted);
+}
+
+.pg-stats dd {
+    margin: 0;
+    font-family: var(--camus-mono);
+    font-size: 0.875rem;
+}
+
+.pg-pairs {
+    margin: 0;
+    font-size: 0.75rem;
+}
+
+.pg-pairs div {
+    display: grid;
+    grid-template-columns: minmax(70px, max-content) minmax(0, 1fr);
+    gap: 8px;
+    padding: 2px 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--camus-border) 50%, transparent);
+}
+
+.pg-pairs dt {
+    color: var(--camus-muted);
+    font-family: var(--camus-mono);
+}
+
+.pg-pairs dd {
+    margin: 0;
+    font-family: var(--camus-mono);
+    overflow-wrap: anywhere;
+}
+
+.pg-factors {
+    margin: 6px 0 0;
+    padding-left: 18px;
+    font-family: var(--camus-mono);
+    font-size: 0.75rem;
+    color: var(--camus-muted);
+}
+
+.pg-ruler {
+    margin-top: 12px;
+    --r: var(--camus-accent);
+}
+
+.pg-ruler.warn {
+    --r: var(--camus-warn);
+}
+
+.pg-ruler-text {
+    font-size: 0.75rem;
+    color: var(--r);
+}
+
+.pg-ruler-track {
+    position: relative;
+    height: 4px;
+    margin: 8px 6px 18px;
+    border-radius: 2px;
+    background: var(--camus-surface-2);
+}
+
+.pg-ruler-tick {
+    position: absolute;
+    top: -3px;
+    width: 1px;
+    height: 10px;
+    background: var(--camus-border);
+}
+
+.pg-ruler-tick span {
+    position: absolute;
+    top: 11px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-family: var(--camus-mono);
+    font-size: 0.625rem;
+    color: var(--camus-muted);
+}
+
+.pg-ruler-mark {
+    position: absolute;
+    top: -4px;
+    width: 12px;
+    height: 12px;
+    margin-left: -6px;
+    border-radius: 50%;
+    border: 2px solid var(--camus-surface);
+}
+
+.pg-ruler-mark.est,
+.pg-ruler-legend .est {
+    background: var(--camus-muted);
+}
+
+.pg-ruler-mark.actual,
+.pg-ruler-legend .actual {
+    background: var(--r);
+}
+
+.pg-ruler-legend {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.6875rem;
+    color: var(--camus-muted);
+}
+
+.pg-ruler-legend span {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+}
+
+.pg-ruler-legend .actual {
+    margin-left: 8px;
+}
+
+.pg-wrap .plan-notes {
+    max-width: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .pg-band {
+        transition: none;
+    }
 }
 
 .results-table {

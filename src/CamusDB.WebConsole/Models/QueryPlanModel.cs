@@ -13,20 +13,26 @@ public enum PlanNodeKind
     Project,
     Exchange,
     SetOperation,
+    Lock,
     Other,
 }
 
 /// <summary>
 /// A query plan read back from the rows of an EXPLAIN result set.
 ///
-/// <para>The server walks a plan that is one chain: every operator has a single <c>Input</c>, and
-/// it emits the chain root first. A join is a link in that chain whose left input is the next row;
-/// its right input never gets a row of its own, so the join's detail text is the only place that
-/// names it (see <see cref="QueryPlanNode.SideInput"/>).</para>
+/// <para>The server walks a plan that is mostly one chain: every operator has a single <c>Input</c>,
+/// and it emits the chain root first. A join is a link in that chain whose left input is the next row.
+/// Its right input usually gets no row of its own, so the join's detail text is the only place that
+/// names it (see <see cref="QueryPlanNode.SideInput"/>). A derived table on the right side of a join
+/// is the exception: it has a row under the join, with the plan of its query under it (see
+/// <see cref="QueryPlanNode.SideBranches"/>).</para>
 ///
-/// <para>A set operation (UNION, INTERSECT, EXCEPT) is the one place where the plan branches. It is
-/// the source of its chain, and each of its two operands is a chain of its own under an
-/// <c>operand</c> row (see <see cref="QueryPlanNode.Branches"/>).</para>
+/// <para>A set operation (UNION, INTERSECT, EXCEPT, and the recursive UNION of WITH RECURSIVE) is the
+/// source of its chain, and each of its two operands is a chain of its own under an <c>operand</c> row
+/// (see <see cref="QueryPlanNode.Branches"/>).</para>
+///
+/// <para>A server that emits the <c>depth</c> column gives the tree directly. For an older server, the
+/// parser reads the tree from the row order.</para>
 /// </summary>
 public sealed class QueryPlanModel
 {
@@ -51,8 +57,16 @@ public sealed class QueryPlanModel
     /// <summary>Measured wall-clock time of the whole plan. Only EXPLAIN (ANALYZE) reports it.</summary>
     public double? TotalTimeMs { get; init; }
 
+    /// <summary>The time to bind and plan the statement, from <c>planning-ms=</c> on the <c>plan-info</c> row of EXPLAIN (ANALYZE).</summary>
+    public double? PlanningMs { get; init; }
+
+    /// <summary>The last operator of the main chain: the one that feeds the result.</summary>
+    public QueryPlanNode Root => Nodes[^1];
+
     internal static IEnumerable<QueryPlanNode> Flatten(IEnumerable<QueryPlanNode> nodes) =>
-        nodes.SelectMany(n => n.Branches.SelectMany(b => Flatten(b.Nodes)).Prepend(n));
+        nodes.SelectMany(n => n.SideBranches.SelectMany(Flatten)
+            .Concat(n.Branches.SelectMany(b => Flatten(b.Nodes)))
+            .Prepend(n));
 }
 
 public sealed class QueryPlanNode
@@ -92,6 +106,19 @@ public sealed class QueryPlanNode
 
     public long? KvScanEntries { get; init; }
 
+    /// <summary>The level of the operator in the plan tree, from the <c>depth</c> column. The root is 0. Null for an older server.</summary>
+    public int? Depth { get; init; }
+
+    /// <summary>How the planner made the row estimate, as the JSON of the <c>estimate_trace</c> column of EXPLAIN (ANALYZE).</summary>
+    public string? EstimateTrace { get; init; }
+
+    /// <summary>
+    /// True for a source right under a filter. The server runs that filter inside the scan, so under
+    /// EXPLAIN (ANALYZE) the source's rows are the rows that pass the filter, while its estimate is the
+    /// rows before the filter. Its rows read are the count to compare with the estimate.
+    /// </summary>
+    public bool HasFoldedFilter { get; internal set; }
+
     /// <summary>
     /// The name of the WITH query that this operator reads, when the statement computes that query
     /// once: the first reader keeps its rows, and every other reader reads the kept rows. Null for
@@ -107,6 +134,13 @@ public sealed class QueryPlanNode
 
     /// <summary>The left and the right operand of a set operation. Empty for any other operator.</summary>
     public List<QueryPlanBranch> Branches { get; } = [];
+
+    /// <summary>
+    /// The inputs that have rows of their own besides the main input, each a chain in data-flow order.
+    /// For a join, this is the derived table on its right side, with the plan of its query. Only a
+    /// server that emits the <c>depth</c> column gives them.
+    /// </summary>
+    public List<IReadOnlyList<QueryPlanNode>> SideBranches { get; } = [];
 }
 
 /// <summary>

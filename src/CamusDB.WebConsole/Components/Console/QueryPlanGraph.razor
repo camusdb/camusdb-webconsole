@@ -1,0 +1,571 @@
+@using System.Globalization
+@using System.Text.Json
+@* Draws an EXPLAIN result as a graph from left to right: every table starts on the left, the rows flow
+   as bands to the result on the right, and the width of a band follows its row count. A click on an
+   operator opens it in the inspector. The layout is in QueryPlanGraphLayout and the findings are in
+   QueryPlanFindings. *@
+
+<div class="pg-wrap">
+    <div class="pg-header">
+        <span class="plan-stage">@Plan.Stage</span>
+        <span>@_operators operator@(_operators == 1 ? "" : "s")</span>
+        @if (Plan.TotalTimeMs is double ms)
+        {
+            <span>Measured <strong>@QueryPlanText.FormatMs(ms)</strong></span>
+        }
+        @if (Plan.PlanningMs is double planning)
+        {
+            <span>Planning <strong>@QueryPlanText.FormatMs(planning)</strong></span>
+        }
+        @if (Plan.TotalEstimatedCost > 0)
+        {
+            <span>Est. cost <strong>@QueryPlanText.FormatCost(Plan.TotalEstimatedCost)</strong></span>
+        }
+        @if (QueryPlanText.Rows(Plan.Root) is long returned)
+        {
+            <span>@(Plan.Root.ActualRows is null ? "Est. rows" : "Rows") <strong>@returned.ToString("N0")</strong></span>
+        }
+        <span class="pg-legend" aria-label="Operator families">
+            @foreach (PlanNodeKind kind in _kinds)
+            {
+                <span class="pg-legend-item"><span class="pg-dot" style="@($"--k: var({QueryPlanGraphLayout.KindColor(kind)})")"></span>@QueryPlanText.KindLabel(kind)</span>
+            }
+        </span>
+        <span class="pg-zoom" role="group" aria-label="Diagram size">
+            <button type="button" class="@(_fit ? "active" : null)" aria-pressed="@(_fit ? "true" : "false")" title="Shrink the diagram to the width of the pane" @onclick="() => _fit = true">Fit</button>
+            <button type="button" class="@(_fit ? null : "active")" aria-pressed="@(_fit ? "false" : "true")" title="Show the diagram at its full size" @onclick="() => _fit = false">100%</button>
+        </span>
+    </div>
+
+    <div class="pg-body">
+        <div class="pg-canvas @(_fit ? "fit" : null)">
+            <svg class="pg-svg" width="@F(_graph.Width)" height="@F(_graph.Height)" viewBox="@($"0 0 {F(_graph.Width)} {F(_graph.Height)}")"
+                 style="@($"--pg-min-width: {F(_graph.Width * 0.8)}px")"
+                 role="group" aria-label="Query plan graph: rows flow from the tables on the left to the result on the right">
+                <defs>
+                    @foreach (PlanGraphEdge edge in _graph.Edges)
+                    {
+                        <linearGradient id="@GradientId(edge)" gradientUnits="userSpaceOnUse" x1="@F(edge.X1)" y1="0" x2="@F(edge.X2)" y2="0">
+                            <stop offset="0" style="@($"stop-color: var({edge.From.Color})")" />
+                            <stop offset="1" style="@($"stop-color: var({edge.To.Color})")" />
+                        </linearGradient>
+                    }
+                    <linearGradient id="@($"pg-{_uid}-drain")" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0" class="pg-drain-start" />
+                        <stop offset="1" class="pg-drain-end" />
+                    </linearGradient>
+                </defs>
+
+                @foreach (PlanGraphEdge edge in _graph.Edges)
+                {
+                    bool ghost = edge.From.Type == PlanGraphNodeType.Ghost;
+                    bool linked = _selected is not null && (edge.From == _selected || edge.To == _selected);
+
+                    <g class="pg-edge @(ghost ? "ghost" : null) @(linked ? "linked" : null)">
+                        <title>@EdgeTitle(edge)</title>
+                        @if (ghost)
+                        {
+                            <path class="pg-band-ghost" d="@edge.Path" />
+                        }
+                        else
+                        {
+                            <path class="pg-band" d="@edge.Path" stroke="@($"url(#{GradientId(edge)})")" stroke-width="@F(edge.Width)" />
+                        }
+                        @if (edge.EstimateWidth is double estimateWidth)
+                        {
+                            <path class="pg-estimate" d="@edge.Path" transform="@($"translate(0 {F(-estimateWidth / 2)})")" />
+                            <path class="pg-estimate" d="@edge.Path" transform="@($"translate(0 {F(estimateWidth / 2)})")" />
+                        }
+                        @if (EdgeLabel(edge) is string label)
+                        {
+                            double labelWidth = label.Length * 6.4 + 12;
+                            <g class="pg-pill-group @(edge.EstimateWidth is null ? null : "warn")">
+                                <rect class="pg-pill" x="@F(edge.LabelX - labelWidth / 2)" y="@F(edge.LabelY - 9)" width="@F(labelWidth)" height="18" rx="9" />
+                                <text class="pg-pill-text" x="@F(edge.LabelX)" y="@F(edge.LabelY + 3.5)" text-anchor="middle">@label</text>
+                            </g>
+                        }
+                    </g>
+                }
+
+                @foreach (PlanGraphNode node in _graph.Nodes)
+                {
+                    if (node.Drain is PlanGraphDrain drain)
+                    {
+                        <g class="pg-drain">
+                            <title>@drain.Title</title>
+                            <path d="@drain.Path" stroke="@($"url(#pg-{_uid}-drain)")" stroke-width="@F(drain.Width)" />
+                            <text x="@F(drain.LabelX)" y="@F(drain.LabelY)" text-anchor="middle">−@QueryPlanText.FormatCompact(drain.Rows)</text>
+                        </g>
+                    }
+                }
+
+                @foreach (PlanGraphNode node in _graph.Nodes)
+                {
+                    @Node(node)
+                }
+            </svg>
+        </div>
+
+        <aside class="pg-side" aria-label="Findings and the selected operator">
+            <section class="pg-findings">
+                <h3>Findings</h3>
+                @if (_findings.Count == 0)
+                {
+                    <p class="pg-empty">Nothing stands out in this plan.@(Plan.IsAnalyze ? null : " EXPLAIN (ANALYZE) runs the query and finds more.")</p>
+                }
+                else
+                {
+                    <ol>
+                        @foreach ((PlanFinding finding, int index) in _findings.Select((f, i) => (f, i)).Take(_allFindings ? int.MaxValue : 3))
+                        {
+                            <li>
+                                <button type="button" class="pg-finding @SeverityClass(finding.Severity) @(_selected?.Plan == finding.Node ? "active" : null)" @onclick="() => Select(finding.Node)">
+                                    <span class="pg-finding-num">@(index + 1)</span>
+                                    <span class="pg-finding-body">
+                                        <strong>@finding.Title</strong>
+                                        <span>@finding.Text</span>
+                                    </span>
+                                </button>
+                            </li>
+                        }
+                    </ol>
+                    @if (_findings.Count > 3)
+                    {
+                        <button type="button" class="pg-more" @onclick="() => _allFindings = !_allFindings">
+                            @(_allFindings ? "Show fewer" : $"{_findings.Count - 3} more")
+                        </button>
+                    }
+                }
+            </section>
+
+            @Inspector()
+        </aside>
+    </div>
+
+    @if (Plan.Notes.Count > 0)
+    {
+        <dl class="plan-notes">
+            @foreach (QueryPlanNote note in Plan.Notes)
+            {
+                <div class="plan-note">
+                    <dt>@QueryPlanText.NoteLabel(note.Name)</dt>
+                    <dd>@note.Detail</dd>
+                </div>
+            }
+        </dl>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public QueryPlanModel Plan { get; set; } = default!;
+
+    private readonly string _uid = Guid.NewGuid().ToString("N")[..8];
+    private QueryPlanModel? _laidOut;
+    private PlanGraph _graph = default!;
+    private IReadOnlyList<PlanFinding> _findings = [];
+    private Dictionary<QueryPlanNode, int> _badges = new(ReferenceEqualityComparer.Instance);
+    private List<PlanNodeKind> _kinds = [];
+    private QueryPlanNode? _hottest;
+    private PlanGraphNode? _selected;
+    private int _operators;
+    private bool _fit = true;
+    private bool _allFindings;
+
+    protected override void OnParametersSet()
+    {
+        if (ReferenceEquals(_laidOut, Plan))
+            return;
+
+        _laidOut = Plan;
+        _graph = QueryPlanGraphLayout.Build(Plan);
+        _findings = QueryPlanFindings.Find(Plan);
+        _allFindings = false;
+
+        List<QueryPlanNode> all = Plan.AllNodes.ToList();
+        _operators = all.Count;
+        _kinds = all.Select(n => n.Kind).Distinct().OrderBy(k => k).ToList();
+
+        // One operator that costs more than each of the others. With a tie at the top, there is none.
+        List<QueryPlanNode> costed = all.Where(n => n.EstimatedCost > 0).OrderByDescending(n => n.EstimatedCost).ToList();
+        _hottest = costed.Count > 1 && costed[0].EstimatedCost > costed[1].EstimatedCost ? costed[0] : null;
+
+        // The badge of a node is the number of its first finding among the three shown first.
+        _badges = new(ReferenceEqualityComparer.Instance);
+        for (int i = 0; i < Math.Min(_findings.Count, 3); i++)
+            _badges.TryAdd(_findings[i].Node, i + 1);
+
+        QueryPlanNode first = _findings.Count > 0 ? _findings[0].Node : _hottest ?? Plan.Root;
+        _selected = _graph.Nodes.FirstOrDefault(n => n.Plan == first);
+    }
+
+    private RenderFragment Node(PlanGraphNode node) => __builder =>
+    {
+        double cx = node.X + QueryPlanGraphLayout.BarWidth / 2;
+        bool selected = node == _selected;
+
+        if (node.Type == PlanGraphNodeType.Result)
+        {
+            <g class="pg-node pg-result" style="@($"--k: var({node.Color})")">
+                <rect class="pg-result-pill" x="@F(node.X)" y="@F(node.Top)" width="70" height="@F(node.BarHeight)" rx="14" />
+                <text class="pg-result-text" x="@F(node.X + 35)" y="@F(node.Y + 4.5)" text-anchor="middle">Result</text>
+                @if (node.Inputs.FirstOrDefault()?.Rows is long rows)
+                {
+                    <g><text class="pg-metric" x="@F(node.X + 35)" y="@F(node.Bottom + 16)" text-anchor="middle">@QueryPlanText.RowsLabel(rows)</text></g>
+                }
+            </g>
+            return;
+        }
+
+        QueryPlanNode? plan = node.Plan;
+        bool hot = plan is not null && plan == _hottest;
+        int? badge = plan is not null && _badges.TryGetValue(plan, out int number) ? number : null;
+        string name = Clip(node.Title, 26);
+        double nameWidth = name.Length * 7.2;
+
+        <g class="pg-node @(node.Type == PlanGraphNodeType.Ghost ? "ghost" : null) @(selected ? "selected" : null) @(hot ? "hot" : null)"
+           style="@($"--k: var({node.Color})")"
+           tabindex="0" role="button" aria-pressed="@(selected ? "true" : "false")"
+           aria-label="@NodeLabel(node)"
+           @onclick="() => _selected = node"
+           @onkeydown="e => OnNodeKey(e, node)">
+            <title>@NodeLabel(node)</title>
+            <rect class="pg-hit" x="@F(cx - 98)" y="@F(node.Top - 38)" width="196" height="@F(node.BarHeight + 60)" />
+            <rect class="pg-halo" x="@F(node.X - 5)" y="@F(node.Top - 5)" width="@F(QueryPlanGraphLayout.BarWidth + 10)" height="@F(node.BarHeight + 10)" rx="6" />
+            @if (node.Type == PlanGraphNodeType.Ghost)
+            {
+                <rect class="pg-ghost-bar" x="@F(node.X)" y="@F(node.Top)" width="@F(QueryPlanGraphLayout.BarWidth)" height="@F(node.BarHeight)" rx="3" />
+            }
+            else
+            {
+                <rect class="pg-bar" x="@F(node.X)" y="@F(node.Top)" width="@F(QueryPlanGraphLayout.BarWidth)" height="@F(node.BarHeight)" rx="3" />
+            }
+            @if (badge is int b)
+            {
+                <g class="pg-badge-group">
+                    <circle class="pg-badge" cx="@F(cx + nameWidth / 2 + 11)" cy="@F(node.Top - 24)" r="8" />
+                    <text class="pg-badge-text" x="@F(cx + nameWidth / 2 + 11)" y="@F(node.Top - 20.5)" text-anchor="middle">@b</text>
+                </g>
+            }
+            <text class="pg-name" x="@F(cx)" y="@F(node.Top - 20)" text-anchor="middle">@name</text>
+            @if (node.Subtitle is string subtitle)
+            {
+                <g><text class="pg-target" x="@F(cx)" y="@F(node.Top - 7)" text-anchor="middle">@Clip(subtitle, 28)</text></g>
+            }
+            @if (plan is not null && Metric(plan) is string metric)
+            {
+                // The drain leaves the bottom right of the bar, so the text moves to its left.
+                <g><text class="pg-metric" x="@F(node.Drain is null ? cx : node.X - 4)" y="@F(node.Bottom + 15)" text-anchor="@(node.Drain is null ? "middle" : "end")">@metric</text></g>
+            }
+        </g>
+    };
+
+    private RenderFragment Inspector() => __builder =>
+    {
+        if (_selected is null)
+            return;
+
+        PlanGraphNode node = _selected;
+
+        if (node.Plan is not QueryPlanNode plan)
+        {
+            <section class="pg-inspector" style="@($"--k: var({node.Color})")">
+                <div class="pg-insp-kind">Join input</div>
+                <div class="pg-insp-title"><span class="plan-op">@node.Title</span></div>
+                @if (node.Subtitle is not null)
+                {
+                    <div class="plan-detail">@node.Subtitle</div>
+                }
+                <p class="plan-desc">This input has no row of its own in the plan, so the plan gives no row count for it. The detail of the join names it.</p>
+            </section>
+            return;
+        }
+
+        double? share = Plan.TotalEstimatedCost > 0 && plan.EstimatedCost is double cost and > 0 ? cost / Plan.TotalEstimatedCost : null;
+        IReadOnlyList<(string? Key, string Value)> pairs = QueryPlanText.DetailPairs(plan);
+
+        <section class="pg-inspector" style="@($"--k: var({node.Color})")">
+            <div class="pg-insp-kind">@QueryPlanText.KindLabel(plan.Kind)</div>
+            <div class="pg-insp-title">
+                <span class="plan-op">@plan.Operator</span>
+                @if (plan.Target is not null)
+                {
+                    <span class="pg-insp-target">@plan.Target</span>
+                }
+            </div>
+            @if (plan.ComputedOnce is not null || plan == _hottest || QueryPlanText.EstimateMiss(plan) is not null)
+            {
+                <div class="pg-insp-badges">
+                    @if (plan.ComputedOnce is string once)
+                    {
+                        <span class="plan-badge info" title="The statement computes the WITH query @once one time. The first reader keeps its rows, and each other reader reads the kept rows.">Computed once: @once</span>
+                    }
+                    @if (plan == _hottest)
+                    {
+                        <span class="plan-badge hot">Highest cost</span>
+                    }
+                    @if (QueryPlanText.EstimateMiss(plan) is string miss)
+                    {
+                        <span class="plan-badge warn">@miss</span>
+                    }
+                </div>
+            }
+            @if (QueryPlanText.Describe(plan.Operator) is string description)
+            {
+                <p class="plan-desc">@description</p>
+            }
+
+            <dl class="pg-stats">
+                @if (plan.ActualRows is long actual)
+                {
+                    <div><dt>Rows</dt><dd>@actual.ToString("N0")</dd></div>
+                }
+                @if (plan.EstimatedRows is long estimated)
+                {
+                    <div><dt>Est. rows</dt><dd>@estimated.ToString("N0")</dd></div>
+                }
+                @if (QueryPlanText.Counter(plan, plan.RowsRead) is long read)
+                {
+                    <div><dt>Rows read</dt><dd>@read.ToString("N0")</dd></div>
+                }
+                @if (QueryPlanText.Counter(plan, plan.KvLookups) is long lookups)
+                {
+                    <div><dt>KV lookups</dt><dd>@lookups.ToString("N0")</dd></div>
+                }
+                @if (QueryPlanText.Counter(plan, plan.KvScanEntries) is long entries)
+                {
+                    <div><dt>KV scan entries</dt><dd>@entries.ToString("N0")</dd></div>
+                }
+                @if (plan.EstimatedCost is double estimatedCost)
+                {
+                    <div><dt>Est. cost</dt><dd>@QueryPlanText.FormatCost(estimatedCost)@(share is double s ? $" ({QueryPlanText.FormatShare(s)})" : null)</dd></div>
+                }
+                @if (plan.ActualTimeMs is double time)
+                {
+                    <div><dt>Time</dt><dd>@QueryPlanText.FormatMs(time)</dd></div>
+                }
+            </dl>
+
+            @if (share is double width)
+            {
+                <div class="plan-cost-bar" title="Share of the plan's estimated cost">
+                    <span style="@($"width:{F(Math.Max(width * 100, 1))}%")"></span>
+                </div>
+            }
+
+            @if (QueryPlanText.MeasuredForEstimate(plan) is long measured && plan.EstimatedRows is long expected)
+            {
+                @Ruler(measured, expected)
+                @if (plan.HasFoldedFilter && plan.ActualRows is not null)
+                {
+                    <p class="pg-insp-hint">The filter above runs inside this scan. So Rows counts the rows that pass the filter, and the estimate is for the rows read.</p>
+                }
+            }
+
+            @if (plan.SideInput is not null)
+            {
+                <h4>@plan.SideInput</h4>
+                <p class="pg-insp-note">@(plan.SideDetail ?? (plan.SideBranches.Count > 0 ? "The plan of its query is the lower input in the graph." : "The plan gives no row for it."))</p>
+            }
+
+            @if (pairs.Count > 0)
+            {
+                <h4>Detail</h4>
+                <dl class="pg-pairs">
+                    @foreach ((string? key, string value) in pairs)
+                    {
+                        <div>
+                            <dt>@(key ?? "·")</dt>
+                            <dd>@value</dd>
+                        </div>
+                    }
+                </dl>
+            }
+
+            @if (plan.Spans.Count > 0)
+            {
+                <h4>Spans</h4>
+                <ul class="plan-spans">
+                    @foreach (QueryPlanSpan span in plan.Spans)
+                    {
+                        <li>@span.Detail@(span.ActualRows is long spanRows ? $" — {spanRows:N0} rows" : null)</li>
+                    }
+                </ul>
+            }
+
+            @if (EstimateTrace(plan.EstimateTrace) is { } trace)
+            {
+                <h4>How the planner estimated the rows</h4>
+                <dl class="pg-pairs">
+                    @foreach ((string key, string value) in trace.Facts)
+                    {
+                        <div><dt>@key</dt><dd>@value</dd></div>
+                    }
+                </dl>
+                @if (trace.Factors.Count > 0)
+                {
+                    <ul class="pg-factors">
+                        @foreach (string factor in trace.Factors)
+                        {
+                            <li>@factor</li>
+                        }
+                    </ul>
+                }
+            }
+        </section>
+    };
+
+    /// <summary>
+    /// The measured rows and the estimate on a log ruler from 1 to a billion, so a factor of ten is the
+    /// same distance anywhere on it.
+    /// </summary>
+    private RenderFragment Ruler(long actual, long estimated) => __builder =>
+    {
+        double ratio = Math.Max(actual, 1) / (double)Math.Max(estimated, 1);
+        string text = ratio >= 1.5 ? $"Measured {Factor(ratio)} more than the estimate"
+            : ratio <= 1 / 1.5 ? $"Measured {Factor(1 / ratio)} fewer than the estimate"
+            : "The estimate is close";
+
+        <div class="pg-ruler @(QueryPlanText.EstimateFactor(_selected!.Plan!) is null ? null : "warn")">
+            <div class="pg-ruler-text">@text</div>
+            <div class="pg-ruler-track">
+                @foreach ((string label, double at) in new[] { ("1", 0d), ("1K", 3d), ("1M", 6d), ("1B", 9d) })
+                {
+                    <span class="pg-ruler-tick" style="@($"left:{F(at / 9 * 100)}%")"><span>@label</span></span>
+                }
+                <span class="pg-ruler-mark est" style="@($"left:{F(RulerAt(estimated))}%")" title="Estimate: @estimated.ToString("N0")"></span>
+                <span class="pg-ruler-mark actual" style="@($"left:{F(RulerAt(actual))}%")" title="Measured: @actual.ToString("N0")"></span>
+            </div>
+            <div class="pg-ruler-legend"><span class="est"></span>estimate <span class="actual"></span>measured</div>
+        </div>
+    };
+
+    private static string Factor(double factor) => factor >= 10 ? $"{factor:N0}×" : $"{factor:0.#}×";
+
+    private static double RulerAt(long value) => Math.Clamp(Math.Log10(Math.Max(value, 1)) / 9 * 100, 0, 100);
+
+    private sealed record Trace(List<(string Key, string Value)> Facts, List<string> Factors);
+
+    /// <summary>The main facts of an <c>estimate_trace</c> JSON object, and one line for each factor. Null when there is none or it does not parse.</summary>
+    private static Trace? EstimateTrace(string? json)
+    {
+        if (json is null)
+            return null;
+
+        try
+        {
+            using JsonDocument document = JsonDocument.Parse(json);
+            JsonElement root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                return null;
+
+            List<(string, string)> facts = [];
+            foreach ((string key, string label) in new[] { ("formula", "Formula"), ("rule", "Rule"), ("base", "Input rows"), ("right", "Right rows"), ("estimate", "Estimate") })
+            {
+                if (root.TryGetProperty(key, out JsonElement value))
+                    facts.Add((label, JsonText(value)));
+            }
+
+            List<string> factors = [];
+            if (root.TryGetProperty("factors", out JsonElement list) && list.ValueKind == JsonValueKind.Array)
+            {
+                foreach (JsonElement factor in list.EnumerateArray())
+                {
+                    string rule = factor.TryGetProperty("rule", out JsonElement r) ? JsonText(r) : "?";
+                    string column = factor.TryGetProperty("column", out JsonElement c) ? $"{JsonText(c)}: " : "";
+                    string selectivity = factor.TryGetProperty("sel", out JsonElement sel) && sel.TryGetDouble(out double value)
+                        ? $" × {value.ToString("0.####", CultureInfo.InvariantCulture)}"
+                        : "";
+                    factors.Add($"{column}{rule}{selectivity}");
+                }
+            }
+
+            return facts.Count == 0 && factors.Count == 0 ? null : new Trace(facts, factors);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static string JsonText(JsonElement value) => value.ValueKind switch
+    {
+        JsonValueKind.String => value.GetString() ?? "",
+        JsonValueKind.Number when value.TryGetDouble(out double number) => number.ToString("#,0.###", CultureInfo.InvariantCulture),
+        _ => value.GetRawText(),
+    };
+
+    private void Select(QueryPlanNode node) => _selected = _graph.Nodes.FirstOrDefault(n => n.Plan == node) ?? _selected;
+
+    private void OnNodeKey(KeyboardEventArgs e, PlanGraphNode node)
+    {
+        if (e.Key is "Enter" or " ")
+            _selected = node;
+    }
+
+    /// <summary>The text under a bar: the measured time where the server gives one, else the share of the cost.</summary>
+    private string? Metric(QueryPlanNode node)
+    {
+        if (node.ActualTimeMs is double ms)
+            return QueryPlanText.FormatMs(ms);
+
+        if (Plan.TotalEstimatedCost > 0 && node.EstimatedCost is double cost and > 0)
+            return $"{QueryPlanText.FormatShare(cost / Plan.TotalEstimatedCost)} of cost";
+
+        return null;
+    }
+
+    /// <summary>The rows of a band, with the role of the input when the node it enters has more than one.</summary>
+    private static string? EdgeLabel(PlanGraphEdge edge)
+    {
+        if (edge.Rows is not long rows)
+            return null;
+
+        string text = QueryPlanText.FormatCompact(rows);
+        if (edge.EstimateWidth is not null && edge.EstimatedRows is long estimated)
+            text = $"{text} · est {QueryPlanText.FormatCompact(estimated)}";
+
+        return edge.To.Inputs.Count > 1 && ShortRole(edge.Role) is string role ? $"{role} · {text}" : text;
+    }
+
+    private static string? ShortRole(string? role) => role?.ToLowerInvariant() switch
+    {
+        null => null,
+        "left input" or "left operand" => "left",
+        "right input" or "right operand" => "right",
+        "non-recursive term" => "non-recursive",
+        "recursive term" => "recursive",
+        string other => other,
+    };
+
+    private static string EdgeTitle(PlanGraphEdge edge)
+    {
+        string from = edge.From.Plan?.Operator ?? edge.From.Title;
+        string role = edge.Role is null ? "" : $" ({edge.Role.ToLowerInvariant()})";
+
+        if (edge.ActualRows is long actual)
+            return edge.EstimatedRows is long estimated
+                ? $"{from} → {edge.To.Title}{role}: {QueryPlanText.RowsLabel(actual)}, estimate {estimated:N0}"
+                : $"{from} → {edge.To.Title}{role}: {QueryPlanText.RowsLabel(actual)}";
+
+        return edge.EstimatedRows is long rows
+            ? $"{from} → {edge.To.Title}{role}: estimate {QueryPlanText.RowsLabel(rows)}"
+            : $"{from} → {edge.To.Title}{role}: the plan gives no row count";
+    }
+
+    private static string NodeLabel(PlanGraphNode node) =>
+        node.Subtitle is null ? node.Title : $"{node.Title} — {node.Subtitle}";
+
+    private static string SeverityClass(PlanFindingSeverity severity) => severity switch
+    {
+        PlanFindingSeverity.Warning => "warning",
+        PlanFindingSeverity.Notice => "notice",
+        _ => "info",
+    };
+
+    private string GradientId(PlanGraphEdge edge) => $"pg-{_uid}-e{edge.Id}";
+
+    private static string Clip(string text, int max) => text.Length <= max ? text : text[..(max - 1)] + "…";
+
+    private static string F(double value) => value.ToString("0.##", CultureInfo.InvariantCulture);
+}

@@ -59,7 +59,7 @@ The console stores this UI state in the browser's `localStorage` and restores it
 - The split between the editor and the results
 - The session database
 - The user name
-- The view for query plans (table or flow)
+- The view for query plans (table, steps or graph)
 - All open SQL tabs, with their text
 - The [query history](sql-editor.md#query-history), under its own key
 

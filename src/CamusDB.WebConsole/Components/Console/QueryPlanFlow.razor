@@ -1,7 +1,9 @@
 @* Draws an EXPLAIN result as a flow: the source at the top, each operator below the one that feeds
    it, and the result at the bottom. An edge carries the number of rows its upper node produces.
    A set operation has two inputs that both have rows: each operand is a box above the set
-   operation, with the operand's own flow inside it, so a nested set operation nests its boxes. *@
+   operation, with the operand's own flow inside it, so a nested set operation nests its boxes.
+   A join whose right input has a plan of its own (a derived table) gets the same two boxes: its
+   left input and its right input. *@
 
 <div class="plan-flow-wrap">
     <div class="plan-summary">
@@ -14,6 +16,10 @@
         @if (Plan.TotalTimeMs is double ms)
         {
             <span>Measured time: <strong>@FormatMs(ms)</strong></span>
+        }
+        @if (Plan.PlanningMs is double planning)
+        {
+            <span>Planning: <strong>@FormatMs(planning)</strong></span>
         }
         <span class="plan-hint">Rows flow from top to bottom.</span>
     </div>
@@ -32,7 +38,7 @@
             @foreach (QueryPlanNote note in Plan.Notes)
             {
                 <div class="plan-note">
-                    <dt>@NoteLabel(note.Name)</dt>
+                    <dt>@QueryPlanText.NoteLabel(note.Name)</dt>
                     <dd>@note.Detail</dd>
                 </div>
             }
@@ -63,21 +69,41 @@
 
     /// <summary>
     /// The layout classes of one chain: <c>has-side</c> makes room for the side boxes of its joins,
-    /// and <c>has-branches</c> for the operand boxes of its set operation.
+    /// and <c>has-branches</c> for the input boxes of its set operation or of a join whose right input
+    /// has a plan.
     /// </summary>
     private static string ChainClass(IReadOnlyList<QueryPlanNode> nodes) => string.Join(' ', new[]
     {
-        nodes.Any(n => n.SideInput is not null) ? "has-side" : null,
-        nodes.Any(n => n.Branches.Count > 0) ? "has-branches" : null,
+        nodes.Any(HasSideBox) ? "has-side" : null,
+        nodes.Any(n => n.Branches.Count > 0 || n.SideBranches.Count > 0) ? "has-branches" : null,
     }.Where(c => c is not null));
 
-    /// <summary>The steps of one chain, each with the edge from the step above it.</summary>
+    /// <summary>A join whose right input has no rows of its own gets a dashed box beside it.</summary>
+    private static bool HasSideBox(QueryPlanNode node) => node.SideInput is not null && node.SideBranches.Count == 0;
+
+    /// <summary>
+    /// The steps of one chain, each with the edge from the step above it. The last join whose right
+    /// input has a plan splits the chain: the steps before it go in its <i>Left input</i> box, which
+    /// splits again at the join before it.
+    /// </summary>
     private RenderFragment Steps(IReadOnlyList<QueryPlanNode> nodes) => __builder =>
     {
-        for (int i = 0; i < nodes.Count; i++)
+        int split = -1;
+        for (int i = nodes.Count - 1; i >= 0 && split < 0; i--)
+        {
+            if (nodes[i].SideBranches.Count > 0)
+                split = i;
+        }
+
+        if (split >= 0)
+        {
+            @Inputs(nodes[split], nodes.Take(split).ToList())
+        }
+
+        for (int i = Math.Max(split, 0); i < nodes.Count; i++)
         {
             QueryPlanNode node = nodes[i];
-            QueryPlanNode? upstream = i > 0 ? nodes[i - 1] : null;
+            QueryPlanNode? upstream = i > 0 && i != split ? nodes[i - 1] : null;
 
             if (node.Branches.Count > 0)
             {
@@ -86,6 +112,41 @@
 
             @Step(node, upstream)
         }
+    };
+
+    /// <summary>
+    /// The input boxes of a join whose right input has a plan of its own: the left input (the steps of
+    /// the chain before the join) and each right input, side by side when there is room.
+    /// </summary>
+    private RenderFragment Inputs(QueryPlanNode join, IReadOnlyList<QueryPlanNode> left) => __builder =>
+    {
+        <li class="plan-branches plan-inputs">
+            @if (left.Count > 0)
+            {
+                @InputBox("Left input", null, left)
+            }
+            @foreach (IReadOnlyList<QueryPlanNode> right in join.SideBranches)
+            {
+                @InputBox(join.SideInput ?? "Right input", join.SideDetail, right)
+            }
+        </li>
+    };
+
+    private RenderFragment InputBox(string title, string? detail, IReadOnlyList<QueryPlanNode> nodes) => __builder =>
+    {
+        <section class="plan-operand" aria-label="@title">
+            <div class="plan-operand-title">@title</div>
+            @if (detail is not null)
+            {
+                <div class="plan-side-detail">@detail</div>
+            }
+            <ol class="plan-flow plan-flow-nested @ChainClass(nodes)">
+                @Steps(nodes)
+                <li class="plan-step">
+                    @Edge(nodes[^1].ActualRows, nodes[^1].EstimatedRows, $"Rows that the {title.ToLowerInvariant()} returns")
+                </li>
+            </ol>
+        </section>
     };
 
     /// <summary>
@@ -98,7 +159,7 @@
         <li class="plan-branches">
             @foreach (QueryPlanBranch branch in setOperation.Branches)
             {
-                string title = branch.Side.Length == 0 ? "Operand" : $"{char.ToUpperInvariant(branch.Side[0])}{branch.Side[1..]} operand";
+                string title = QueryPlanText.OperandTitle(setOperation, branch);
 
                 <section class="plan-operand" aria-label="@title">
                     <div class="plan-operand-title">@title</div>
@@ -125,8 +186,9 @@
     };
 
     /// <summary>
-    /// One operator, with the edge from <paramref name="upstream"/>. A set operation has no upstream
-    /// node: its edge comes from the operand boxes above it and carries no label.
+    /// One operator, with the edge from <paramref name="upstream"/>. A set operation, and a join whose
+    /// right input has a plan, has no upstream node: its edge comes from the boxes above it and carries
+    /// no label.
     /// </summary>
     private RenderFragment Step(QueryPlanNode node, QueryPlanNode? upstream) => __builder =>
     {
@@ -137,13 +199,13 @@
             {
                 @Edge(upstream)
             }
-            else if (node.Branches.Count > 0)
+            else if (node.Branches.Count > 0 || node.SideBranches.Count > 0)
             {
                 @Edge(null, null, null)
             }
             <div class="plan-node @(node == _hottest ? "hot" : null)">
                 <div class="plan-node-head">
-                    <span class="plan-kind-label">@KindLabel(node.Kind)</span>
+                    <span class="plan-kind-label">@QueryPlanText.KindLabel(node.Kind)</span>
                     <span class="plan-op">@node.Operator</span>
                     @if (node.Target is not null)
                     {
@@ -157,12 +219,12 @@
                     {
                         <span class="plan-badge hot" title="This operator has the highest estimated cost in the plan.">Highest cost</span>
                     }
-                    @if (EstimateMiss(node) is string miss)
+                    @if (QueryPlanText.EstimateMiss(node) is string miss)
                     {
                         <span class="plan-badge warn" title="The planner's row estimate and the measured row count are far apart.">@miss</span>
                     }
                 </div>
-                @if (Describe(node.Operator) is string description)
+                @if (QueryPlanText.Describe(node.Operator) is string description)
                 {
                     <div class="plan-desc">@description</div>
                 }
@@ -177,15 +239,15 @@
                         {
                             <span>est. cost <strong>@FormatCost(node.EstimatedCost!.Value)</strong> (@FormatShare(s))</span>
                         }
-                        @if (Counter(node, node.RowsRead) is long read)
+                        @if (QueryPlanText.Counter(node, node.RowsRead) is long read)
                         {
                             <span>rows read <strong>@read.ToString("N0")</strong></span>
                         }
-                        @if (Counter(node, node.KvLookups) is long lookups)
+                        @if (QueryPlanText.Counter(node, node.KvLookups) is long lookups)
                         {
                             <span>KV lookups <strong>@lookups.ToString("N0")</strong></span>
                         }
-                        @if (Counter(node, node.KvScanEntries) is long entries)
+                        @if (QueryPlanText.Counter(node, node.KvScanEntries) is long entries)
                         {
                             <span>KV scan entries <strong>@entries.ToString("N0")</strong></span>
                         }
@@ -207,7 +269,7 @@
                     </ul>
                 }
             </div>
-            @if (node.SideInput is not null)
+            @if (HasSideBox(node))
             {
                 <div class="plan-side">
                     <div class="plan-side-link" aria-hidden="true"></div>
@@ -264,100 +326,17 @@
     private double? CostShare(QueryPlanNode node) =>
         Plan.TotalEstimatedCost > 0 && node.EstimatedCost is double cost and > 0 ? cost / Plan.TotalEstimatedCost : null;
 
-    /// <summary>
-    /// ANALYZE reports the storage counters on every operator, and they are 0 on each one that
-    /// does not touch storage. A zero is news on a source only, so the other operators leave it out.
-    /// </summary>
-    private static long? Counter(QueryPlanNode node, long? value) =>
-        value is long v && (v > 0 || node.Kind == PlanNodeKind.Source) ? v : null;
-
     private static bool HasMetrics(QueryPlanNode node, double? share) =>
         share is not null
-        || Counter(node, node.RowsRead) is not null
-        || Counter(node, node.KvLookups) is not null
-        || Counter(node, node.KvScanEntries) is not null;
+        || QueryPlanText.Counter(node, node.RowsRead) is not null
+        || QueryPlanText.Counter(node, node.KvLookups) is not null
+        || QueryPlanText.Counter(node, node.KvScanEntries) is not null;
 
-    private static string FormatShare(double share) =>
-        share < 0.005 ? "<1%" : $"{share * 100:0}%";
+    private static string FormatShare(double share) => QueryPlanText.FormatShare(share);
 
-    /// <summary>
-    /// A label when the measured rows are ten times the estimate or a tenth of it. Small counts are
-    /// left out: 2 rows against an estimate of 25 is not worth a developer's attention.
-    /// </summary>
-    private static string? EstimateMiss(QueryPlanNode node)
-    {
-        if (node.ActualRows is not long actual || node.EstimatedRows is not long estimated)
-            return null;
+    private static string FormatCost(double cost) => QueryPlanText.FormatCost(cost);
 
-        long high = Math.Max(actual, estimated);
-        long low = Math.Max(Math.Min(actual, estimated), 1);
-        if (high < 100 || high / (double)low < 10)
-            return null;
+    private static string FormatMs(double ms) => QueryPlanText.FormatMs(ms);
 
-        return $"Estimate off {high / (double)low:0}×";
-    }
-
-    private static string FormatCost(double cost) => cost.ToString(cost >= 100 ? "N0" : "#,0.##");
-
-    private static string FormatMs(double ms) =>
-        ms < 1 ? $"{ms * 1000:0.##}μs" : ms < 1000 ? $"{ms:0.##}ms" : $"{ms / 1000:0.###}s";
-
-    private static string KindClass(PlanNodeKind kind) => "kind-" + kind.ToString().ToLowerInvariant();
-
-    private static string KindLabel(PlanNodeKind kind) => kind switch
-    {
-        PlanNodeKind.Source => "Source",
-        PlanNodeKind.Join => "Join",
-        PlanNodeKind.Filter => "Filter",
-        PlanNodeKind.Aggregate => "Aggregate",
-        PlanNodeKind.Sort => "Sort",
-        PlanNodeKind.Window => "Window",
-        PlanNodeKind.Limit => "Limit",
-        PlanNodeKind.Project => "Output",
-        PlanNodeKind.Exchange => "Exchange",
-        PlanNodeKind.SetOperation => "Set operation",
-        _ => "Step",
-    };
-
-    private static string? Describe(string op) => op.ToLowerInvariant() switch
-    {
-        "table-scan" => "Reads every row of the table.",
-        "index-lookup" => "Finds the rows for one exact index key.",
-        "index-range-scan" => "Reads a range of keys from an index.",
-        "index-in-list" => "Looks up each value of an IN list in an index.",
-        "gin-scan" => "Finds the candidate rows for a JSONB condition in a GIN index. The filter above checks each one.",
-        "derived-table-scan" => "Reads the rows of a subquery in FROM or of a WITH query.",
-        "function-scan" => "Makes rows with a function in FROM, without reading a table.",
-        "constant-source" => "Makes one row without reading a table.",
-        "filter" => "Keeps only the rows that match the condition.",
-        "having-filter" => "Keeps only the groups that match HAVING.",
-        "aggregate" => "Groups the rows and computes the aggregates.",
-        "distinct" => "Removes duplicate rows.",
-        "sort" => "Sorts all the rows.",
-        "topk" => "Keeps only the first k rows in sort order, without a full sort.",
-        "window" => "Sorts the rows once for each window and computes the window functions, one partition at a time.",
-        "limit" => "Stops after the row limit.",
-        "project" => "Computes the output columns.",
-        "nested-loop-join" => "Compares each left row with each right row.",
-        "index-nested-loop-join" => "For each left row, finds the matching right rows through an index.",
-        "hash-join" => "Puts one input in a hash table, then probes it with the other input.",
-        "merge-join" => "Merges two inputs that are sorted on the join keys.",
-        "semi-join" => "Keeps each row that has a match in the subquery (IN, EXISTS).",
-        "anti-join" => "Keeps each row that has no match in the subquery (NOT IN, NOT EXISTS).",
-        "null-aware-anti-join" => "Keeps each row that has no match in the subquery, with the NULL rules of NOT IN.",
-        "gather" => "Collects the rows from the partitions of the cluster.",
-        "lock_rows" => "Locks each row before it passes the row on (FOR UPDATE).",
-        "union" => "Returns the rows of both operands. Without ALL, it removes duplicate rows.",
-        "intersect" => "Returns the rows that are in both operands.",
-        "except" => "Returns the rows of the left operand that are not in the right operand.",
-        _ => null,
-    };
-
-    private static string NoteLabel(string name) => name.ToLowerInvariant() switch
-    {
-        "plan-info" => "Plan info",
-        "distribution" => "Distribution",
-        "cache" => "Result cache",
-        _ => name,
-    };
+    private static string KindClass(PlanNodeKind kind) => QueryPlanText.KindClass(kind);
 }

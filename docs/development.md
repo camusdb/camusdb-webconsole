@@ -6,14 +6,15 @@ To run the console from source, see [Install and run](install.md#from-source).
 
 ```
 src/CamusDB.WebConsole/
-  Components/Console/   # Schema tree, editor, results grid, query plan flow, dialogs (configure,
+  Components/Console/   # Schema tree, editor, results grid, query plan steps and graph, dialogs (configure,
                         # create table, add index, add foreign key, edit record, export, confirm,
                         # query history)
   Components/Admin/     # Administration tabs: node stats, engine stats, statement stats, index usage,
                         # variables, backups
   Components/Layout/    # Main shell + theme
-  Services/             # Session, schema, query execution, query plan parser, export, preferences,
-                        # SQL builder, script splitter, query history, schema completion
+  Services/             # Session, schema, query execution, query plan parser, graph layout and
+                        # findings, export, preferences, SQL builder, script splitter, query
+                        # history, schema completion
   Models/               # Query results, query plans, schema nodes, table data context, UI preferences,
                         # query history entries
   Options/              # CamusDbOptions

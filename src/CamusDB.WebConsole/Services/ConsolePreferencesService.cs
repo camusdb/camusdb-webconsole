@@ -80,13 +80,14 @@ public sealed class ConsolePreferencesService
         await PersistAsync().ConfigureAwait(false);
     }
 
-    public async Task SetPlanAsFlowAsync(bool asFlow)
+    /// <summary>Remembers the view of an EXPLAIN result (see <see cref="PlanViews"/>), so the next plan opens the same way.</summary>
+    public async Task SetPlanViewAsync(string view)
     {
         await EnsureLoadedAsync().ConfigureAwait(false);
-        if (_prefs.PlanAsFlow == asFlow)
+        if (string.Equals(_prefs.PlanView, view, StringComparison.Ordinal))
             return;
 
-        _prefs.PlanAsFlow = asFlow;
+        _prefs.PlanView = view;
         await PersistAsync().ConfigureAwait(false);
     }
 
