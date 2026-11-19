@@ -47,6 +47,33 @@
                                    OnClick="OpenHistoryAsync"
                                    aria-label="Query history" />
                 </MudTooltip>
+                @if (Session.InTransaction)
+                {
+                    <MudTooltip Text="@TransactionTooltip()">
+                        <span class="txn-badge" role="status">
+                            <MudIcon Icon="@Icons.Material.Filled.PendingActions" Size="Size.Small" />
+                            Transaction open · @Session.TransactionDatabase ·
+                            @Session.TransactionStatements statement@(Session.TransactionStatements == 1 ? "" : "s")
+                        </span>
+                    </MudTooltip>
+                    <MudButton Variant="Variant.Outlined"
+                               Size="Size.Small"
+                               Class="txn-commit-btn"
+                               StartIcon="@Icons.Material.Filled.Check"
+                               Disabled="_running"
+                               OnClick="@(() => FinishTransactionAsync("COMMIT"))">
+                        Commit
+                    </MudButton>
+                    <MudButton Variant="Variant.Outlined"
+                               Size="Size.Small"
+                               Color="Color.Warning"
+                               Class="txn-rollback-btn"
+                               StartIcon="@Icons.Material.Filled.Undo"
+                               Disabled="_running"
+                               OnClick="@(() => FinishTransactionAsync("ROLLBACK"))">
+                        Rollback
+                    </MudButton>
+                }
                 <span class="toolbar-spacer"></span>
                 @if (_running)
                 {
@@ -164,6 +191,7 @@
     protected override void OnInitialized()
     {
         Session.Changed += OnSessionChanged;
+        Session.TransactionChanged += OnSessionChanged;
         _completionRef = DotNetObjectReference.Create(Completion);
     }
 
@@ -269,6 +297,41 @@
     }
 
     private void OnSessionChanged() => InvokeAsync(StateHasChanged);
+
+    private string TransactionTooltip() =>
+        $"Started at {Session.TransactionStartedAt:HH:mm:ss}. Each statement runs in this transaction until "
+        + "COMMIT or ROLLBACK. CamusDB rolls back a transaction that is idle for longer than its idle "
+        + "timeout, 5 minutes by default.";
+
+    /// <summary>
+    /// Runs COMMIT or ROLLBACK for a toolbar button, as the editor runs the statement. The result goes
+    /// to the history and to a message. The results of the tab do not change.
+    /// </summary>
+    private async Task FinishTransactionAsync(string sql)
+    {
+        if (_running)
+            return;
+
+        _running = true;
+        StateHasChanged();
+
+        try
+        {
+            string database = Session.Database;
+            QueryResultModel result = await Queries.ExecuteAsync(sql);
+            await History.AddAsync(sql, database, result);
+
+            if (result.Success)
+                Snackbar.Add(result.Message ?? $"{sql} completed.", Severity.Success);
+            else
+                Snackbar.Add(result.ErrorMessage ?? $"{sql} failed.", Severity.Error);
+        }
+        finally
+        {
+            _running = false;
+            StateHasChanged();
+        }
+    }
 
     private void OnHasSelectionChanged(bool hasSelection)
     {
@@ -698,6 +761,7 @@
     public void Dispose()
     {
         Session.Changed -= OnSessionChanged;
+        Session.TransactionChanged -= OnSessionChanged;
         _cts?.Cancel();
         _cts?.Dispose();
         _completionRef?.Dispose();

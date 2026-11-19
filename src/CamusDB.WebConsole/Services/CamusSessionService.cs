@@ -270,6 +270,151 @@ public sealed class CamusSessionService : IAsyncDisposable
 
     public event Action? Changed;
 
+    // The session's explicit transaction, between BEGIN and COMMIT or ROLLBACK. The driver keeps it on
+    // the session connection and sends its identifiers with each statement that has it as its
+    // Transaction. Null in autocommit.
+    private CamusTransaction? _transaction;
+
+    // Statements of one transaction go to the server one at a time. A script, a dialog and the grid can
+    // run statements at the same time, and the server does not run two statements of one transaction
+    // in parallel.
+    private readonly SemaphoreSlim _transactionGate = new(1, 1);
+
+    /// <summary>
+    /// Raised when a transaction starts or ends, and when a statement runs in it. It is separate from
+    /// <see cref="Changed"/>, because a change of the session reloads the schema tree, and a
+    /// transaction does not change what the tree shows.
+    /// </summary>
+    public event Action? TransactionChanged;
+
+    /// <summary>True between a <c>BEGIN</c> and its <c>COMMIT</c> or <c>ROLLBACK</c>.</summary>
+    public bool InTransaction => _transaction is not null;
+
+    /// <summary>
+    /// The database of the open transaction. The session does not switch to another database while
+    /// the transaction is open (<see cref="ChangeDatabaseAsync"/>).
+    /// </summary>
+    public string? TransactionDatabase { get; private set; }
+
+    /// <summary>When the open transaction started.</summary>
+    public DateTimeOffset? TransactionStartedAt { get; private set; }
+
+    /// <summary>The number of statements that ran with success in the open transaction.</summary>
+    public int TransactionStatements { get; private set; }
+
+    /// <summary>The open transaction, or null. Statements that run in it hold <see cref="TransactionGate"/>.</summary>
+    internal CamusTransaction? Transaction => _transaction;
+
+    internal SemaphoreSlim TransactionGate => _transactionGate;
+
+    /// <summary>Starts an explicit transaction in the current database.</summary>
+    /// <exception cref="InvalidOperationException">A transaction is already open.</exception>
+    internal async Task BeginTransactionAsync(CancellationToken cancellationToken)
+    {
+        if (_transaction is not null)
+            throw new InvalidOperationException(
+                $"A transaction is already open in database '{TransactionDatabase}'. Commit it or roll it back first.");
+
+        CamusTransaction transaction = await GetConnection().BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+
+        _transaction = transaction;
+        TransactionDatabase = Database;
+        TransactionStartedAt = DateTimeOffset.Now;
+        TransactionStatements = 0;
+        TransactionChanged?.Invoke();
+    }
+
+    /// <summary>
+    /// Commits the open transaction. The transaction is closed also when the commit fails: the server
+    /// rolls back a transaction whose commit it refuses.
+    /// </summary>
+    internal async Task CommitTransactionAsync()
+    {
+        CamusTransaction transaction = TakeTransaction()
+            ?? throw new InvalidOperationException("No transaction is open, so there is nothing to commit.");
+
+        // No cancellation: a commit that the client stops halfway has an unknown outcome, and it can
+        // leave locks on the server until their lease expires.
+        try
+        {
+            await transaction.CommitAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+        finally
+        {
+            await DisposeTransactionAsync(transaction).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>Rolls back the open transaction. The transaction is closed also when the rollback fails.</summary>
+    internal async Task RollbackTransactionAsync()
+    {
+        CamusTransaction transaction = TakeTransaction()
+            ?? throw new InvalidOperationException("No transaction is open, so there is nothing to roll back.");
+
+        try
+        {
+            await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+        finally
+        {
+            await DisposeTransactionAsync(transaction).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Closes the open transaction after a failure, and rolls it back. A statement that fails on the
+    /// server makes the server roll the transaction back. A statement that the driver refuses before it
+    /// sends it, such as <c>TRUNCATE</c> in a transaction (<c>CADB0538</c>), leaves the transaction open
+    /// on the server with its locks, so the rollback here ends it.
+    /// </summary>
+    internal async Task DiscardTransactionAsync()
+    {
+        if (TakeTransaction() is { } transaction)
+            await DisposeTransactionAsync(transaction).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Disposes a transaction that the session no longer holds. The driver rolls back a transaction
+    /// that did not commit or roll back when it disposes it, and it ignores the failure of that
+    /// rollback: the usual cause is a transaction that the server ended already. The wait has a limit,
+    /// because the server can be gone. A transaction that is still open on the server then ends at the
+    /// server's idle timeout.
+    /// </summary>
+    private static async Task DisposeTransactionAsync(CamusTransaction transaction)
+    {
+        try
+        {
+            await transaction.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+        }
+        catch
+        {
+            // The rollback goes on without the session, or it failed. Nothing is left to do here.
+        }
+    }
+
+    /// <summary>Counts a statement that ran with success in the open transaction.</summary>
+    internal void CountTransactionStatement()
+    {
+        if (_transaction is null)
+            return;
+
+        TransactionStatements++;
+        TransactionChanged?.Invoke();
+    }
+
+    private CamusTransaction? TakeTransaction()
+    {
+        CamusTransaction? transaction = Interlocked.Exchange(ref _transaction, null);
+        if (transaction is null)
+            return null;
+
+        TransactionDatabase = null;
+        TransactionStartedAt = null;
+        TransactionStatements = 0;
+        TransactionChanged?.Invoke();
+        return transaction;
+    }
+
     /// <summary>
     /// Applies a preferred database name before the first connect (e.g. from localStorage).
     /// Ignored once a connection is open.
@@ -845,6 +990,9 @@ public sealed class CamusSessionService : IAsyncDisposable
     /// </summary>
     public async Task SignOutAsync(CancellationToken cancellationToken = default)
     {
+        // Before the revoke: the rollback needs the token.
+        await DiscardTransactionAsync().ConfigureAwait(false);
+
         await RevokeTokenAsync(cancellationToken).ConfigureAwait(false);
 
         User = "";
@@ -893,6 +1041,12 @@ public sealed class CamusSessionService : IAsyncDisposable
         if (string.Equals(Database, trimmed, StringComparison.OrdinalIgnoreCase))
             return;
 
+        // The transaction reads its database from the connection at each statement and at its commit.
+        // After a switch, its statements and its commit would go to the other database.
+        if (_transaction is not null)
+            throw new InvalidOperationException(
+                $"A transaction is open in database '{TransactionDatabase}'. Commit it or roll it back before you switch to database '{trimmed}'.");
+
         CamusConnection connection = GetConnection();
         connection.ChangeDatabase(trimmed);
         Database = trimmed;
@@ -911,6 +1065,10 @@ public sealed class CamusSessionService : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        // A transaction left open keeps its locks until the server's idle timeout ends it. The rollback
+        // goes first, because it needs the token that the revoke below ends.
+        await DiscardTransactionAsync().ConfigureAwait(false);
+
         // Best effort on circuit teardown: a token left alive is valid until the server expires it.
         using CancellationTokenSource timeout = new(TimeSpan.FromSeconds(2));
         try
@@ -925,8 +1083,11 @@ public sealed class CamusSessionService : IAsyncDisposable
         await CleanupConnectionAsync().ConfigureAwait(false);
     }
 
-    private Task CleanupConnectionAsync()
+    private async Task CleanupConnectionAsync()
     {
+        // A new connection cannot finish the transaction of this one.
+        await DiscardTransactionAsync().ConfigureAwait(false);
+
         lock (_gate)
         {
             if (_connection is not null)
@@ -955,7 +1116,6 @@ public sealed class CamusSessionService : IAsyncDisposable
         }
 
         NotifyChanged();
-        return Task.CompletedTask;
     }
 
     private void NotifyChanged() => Changed?.Invoke();

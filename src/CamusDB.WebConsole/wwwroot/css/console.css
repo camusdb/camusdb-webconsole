@@ -399,6 +399,7 @@ html, body {
 
 .query-editor-toolbar {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     justify-content: flex-end;
     gap: 8px;
@@ -554,6 +555,23 @@ html, body {
 
 .toolbar-spacer {
     flex: 1;
+}
+
+/* The open transaction, in the editor toolbar and in the footer. */
+.txn-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--camus-warn) 15%, transparent);
+    color: var(--camus-warn);
+    font-size: 0.75rem;
+    white-space: nowrap;
+}
+
+.footer-txn {
+    color: var(--camus-warn);
 }
 
 /* One tab for each statement of a script run. */

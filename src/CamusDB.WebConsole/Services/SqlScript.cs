@@ -26,6 +26,29 @@ public enum SchemaEffect
     Databases,
 }
 
+/// <summary>A statement that starts or ends the session's explicit transaction.</summary>
+public enum TransactionStatement
+{
+    /// <summary>Any other statement.</summary>
+    None,
+
+    /// <summary><c>BEGIN</c> or <c>START TRANSACTION</c>.</summary>
+    Begin,
+
+    /// <summary><c>COMMIT</c>.</summary>
+    Commit,
+
+    /// <summary><c>ROLLBACK</c>.</summary>
+    Rollback,
+
+    /// <summary>
+    /// A statement that starts with <c>BEGIN</c>, <c>START</c>, <c>COMMIT</c> or <c>ROLLBACK</c> but
+    /// has more words than the server grammar accepts, such as <c>BEGIN ISOLATION LEVEL …</c> or
+    /// <c>ROLLBACK TO SAVEPOINT …</c>.
+    /// </summary>
+    Unsupported,
+}
+
 /// <summary>
 /// Reads SQL text the way the CamusDB lexer does, without a parser: it splits a script into its
 /// statements and finds words outside strings, quoted names and comments.
@@ -272,6 +295,73 @@ public static class SqlScript
         {
             "TRUNCATE" => true,
             "DROP" => words.Count > 1 && words[1] is "TABLE" or "DATABASE",
+            _ => false,
+        };
+    }
+
+    /// <summary>
+    /// The transaction statement that <paramref name="sql"/> is. The server grammar accepts
+    /// <c>BEGIN</c>, <c>START TRANSACTION</c>, <c>COMMIT</c> and <c>ROLLBACK</c> with nothing after them.
+    /// The console runs these statements itself, because each REST request is a statement of its own
+    /// and only the driver keeps a transaction open between them. Comments, and <c>;</c> at the end, can
+    /// surround the words.
+    /// </summary>
+    public static TransactionStatement TransactionStatementOf(string sql)
+    {
+        List<Token> tokens = [];
+        foreach (Token token in Tokenize(sql))
+        {
+            if (token.Kind is TokenKind.Whitespace or TokenKind.Comment)
+                continue;
+
+            tokens.Add(token);
+
+            // Three tokens are enough to tell START TRANSACTION from a longer statement.
+            if (tokens.Count > 3)
+                break;
+        }
+
+        while (tokens.Count > 0 && tokens[^1].Kind == TokenKind.Symbol && sql[tokens[^1].Start] == ';')
+            tokens.RemoveAt(tokens.Count - 1);
+
+        if (tokens.Count == 0 || tokens[0].Kind != TokenKind.Word)
+            return TransactionStatement.None;
+
+        string first = Text(tokens[0]);
+        bool alone = tokens.Count == 1;
+
+        return first switch
+        {
+            "BEGIN" => alone ? TransactionStatement.Begin : TransactionStatement.Unsupported,
+            "START" => tokens.Count == 2 && tokens[1].Kind == TokenKind.Word && Text(tokens[1]) == "TRANSACTION"
+                ? TransactionStatement.Begin
+                : TransactionStatement.Unsupported,
+            "COMMIT" => alone ? TransactionStatement.Commit : TransactionStatement.Unsupported,
+            "ROLLBACK" => alone ? TransactionStatement.Rollback : TransactionStatement.Unsupported,
+            _ => TransactionStatement.None,
+        };
+
+        string Text(Token token) => sql[token.Start..token.End].ToUpperInvariant();
+    }
+
+    /// <summary>
+    /// True for a statement that CamusDB commits at once, also inside an explicit transaction, so a
+    /// <c>ROLLBACK</c> of the transaction does not undo it. The server runs each schema DDL statement
+    /// in an internal transaction of its own, and it runs users, grants, cluster settings and
+    /// <c>CANCEL QUERY</c> outside every transaction. Remove a statement from this list when the server
+    /// makes it part of the caller's transaction.
+    /// </summary>
+    public static bool CommitsOutsideTransaction(string sql)
+    {
+        List<string> words = LeadingWords(sql, 3);
+        if (words.Count == 0)
+            return false;
+
+        return words[0] switch
+        {
+            "CREATE" or "ALTER" or "DROP" or "RENAME" or "COMMENT" or "TRUNCATE" or "GRANT" or "REVOKE" => true,
+            "SET" or "RESET" => words.Count == 3 && words[1] == "CLUSTER" && words[2] == "SETTING",
+            "CANCEL" => words.Count > 1 && words[1] == "QUERY",
             _ => false,
         };
     }

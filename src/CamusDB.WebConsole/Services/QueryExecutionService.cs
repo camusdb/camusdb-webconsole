@@ -82,23 +82,23 @@ public sealed class QueryExecutionService
         if (!_session.IsConnected)
             return QueryResultModel.Failure("Not connected to CamusDB.", null, total.Elapsed);
 
-        try
-        {
-            return await ExecutePageAsync(_session.GetConnection(), previous.PageSql, previous, total, cancellationToken)
-                .ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            return QueryResultModel.Failure("Query cancelled.", null, total.Elapsed);
-        }
-        catch (CamusException ex)
-        {
-            return QueryResultModel.Failure(CamusSessionService.Describe(ex), ex.Code, total.Elapsed);
-        }
-        catch (Exception ex)
-        {
-            return QueryResultModel.Failure(ex.Message, null, total.Elapsed);
-        }
+        string pageSql = previous.PageSql;
+        return await RunAsync(
+            sql: null,
+            async transaction =>
+            {
+                try
+                {
+                    return await ExecutePageAsync(_session.GetConnection(), pageSql, previous, transaction, total, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    return FailureOf(ex, total);
+                }
+            },
+            total,
+            cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<QueryResultModel> ExecuteCoreAsync(string sql, bool paged, CancellationToken cancellationToken)
@@ -111,11 +111,218 @@ public sealed class QueryExecutionService
         if (!_session.IsConnected)
             return QueryResultModel.Failure("Not connected to CamusDB.", null, total.Elapsed);
 
+        TransactionStatement transactionStatement = SqlScript.TransactionStatementOf(sql);
+        if (transactionStatement != TransactionStatement.None)
+            return await ExecuteTransactionStatementAsync(transactionStatement, total, cancellationToken).ConfigureAwait(false);
+
+        return await RunAsync(
+            sql,
+            transaction => ExecuteStatementAsync(sql, paged, transaction, total, cancellationToken),
+            total,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Runs one statement through <paramref name="run"/>. In autocommit the statement runs at once,
+    /// with no transaction. While a transaction is open, the statement waits for the statements
+    /// before it in the transaction and then runs in it. Then:
+    /// <list type="bullet">
+    /// <item>A statement that cannot run in a transaction (<see cref="TransactionRefusal"/>) is refused,
+    /// and the transaction stays open, because nothing went to the server.</item>
+    /// <item>A statement that fails closes the transaction. The server rolls back the transaction of a
+    /// statement that fails, so the console must not show it as open.</item>
+    /// </list>
+    /// No statement goes to the server outside an open transaction. Such a statement would commit at
+    /// once, and a later ROLLBACK would appear to undo it.
+    /// </summary>
+    private async Task<QueryResultModel> RunAsync(
+        string? sql,
+        Func<CamusTransaction?, Task<QueryResultModel>> run,
+        Stopwatch total,
+        CancellationToken cancellationToken)
+    {
+        if (!_session.InTransaction)
+            return await run(null).ConfigureAwait(false);
+
+        try
+        {
+            await _session.TransactionGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return QueryResultModel.Failure("Query cancelled. The transaction is still open.", null, total.Elapsed);
+        }
+
+        try
+        {
+            // The transaction can end while the statement waits for its turn.
+            if (_session.Transaction is not { } transaction)
+                return await run(null).ConfigureAwait(false);
+
+            if (sql is not null && TransactionRefusal(sql) is { } refusal)
+                return QueryResultModel.Failure(refusal + " The transaction is still open.", null, total.Elapsed);
+
+            QueryResultModel result = await run(transaction).ConfigureAwait(false);
+            if (result.Success)
+            {
+                _session.CountTransactionStatement();
+                return result;
+            }
+
+            await _session.DiscardTransactionAsync().ConfigureAwait(false);
+            return QueryResultModel.Failure(
+                (result.ErrorMessage ?? "The statement failed.") + " The transaction was rolled back.",
+                result.ErrorCode,
+                result.TotalDuration);
+        }
+        finally
+        {
+            _session.TransactionGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Why the statement cannot run in the open transaction, or null when it can. A statement on a
+    /// whole database (<c>CREATE</c>, <c>DROP</c>, <c>ALTER</c> or <c>RENAME DATABASE</c>) is refused.
+    /// The console sends <c>CREATE</c> and <c>DROP DATABASE</c> to admin endpoints that take no
+    /// transaction, and the server runs the others outside every transaction. So each one commits at
+    /// once. A rename of the transaction's own database also leaves the transaction on a name that is
+    /// gone. Each other statement goes to the server in the transaction, and the server accepts or
+    /// refuses it.
+    /// </summary>
+    private static string? TransactionRefusal(string sql)
+    {
+        if (SqlScript.SchemaEffectOf(sql) != SchemaEffect.Databases)
+            return null;
+
+        return $"{SqlScript.FirstWord(sql)} DATABASE cannot run in a transaction, because a ROLLBACK cannot undo it. "
+            + "Commit the transaction or roll it back first.";
+    }
+
+    /// <summary>
+    /// Runs <c>BEGIN</c>, <c>COMMIT</c> or <c>ROLLBACK</c> on the session's transaction. The server has
+    /// no SQL form of them over REST: the driver starts and ends a transaction with requests of its
+    /// own. A <c>COMMIT</c> or a <c>ROLLBACK</c> closes the transaction also when it fails, because the
+    /// server ends a transaction whose commit or rollback it refuses.
+    /// </summary>
+    private async Task<QueryResultModel> ExecuteTransactionStatementAsync(
+        TransactionStatement statement,
+        Stopwatch total,
+        CancellationToken cancellationToken)
+    {
+        string stillOpen = _session.InTransaction ? " The transaction is still open." : "";
+
+        if (statement == TransactionStatement.Unsupported)
+        {
+            return QueryResultModel.Failure(
+                "The console runs BEGIN, START TRANSACTION, COMMIT and ROLLBACK with nothing after them. "
+                + "To set the isolation level, run SET TRANSACTION ISOLATION LEVEL … as the first statement after BEGIN."
+                + stillOpen,
+                null,
+                total.Elapsed);
+        }
+
+        try
+        {
+            await _session.TransactionGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return QueryResultModel.Failure("Query cancelled." + stillOpen, null, total.Elapsed);
+        }
+
+        try
+        {
+            Stopwatch execute = Stopwatch.StartNew();
+            string message;
+
+            switch (statement)
+            {
+                case TransactionStatement.Begin:
+                    if (_session.InTransaction)
+                    {
+                        return QueryResultModel.Failure(
+                            $"A transaction is already open in database '{_session.TransactionDatabase}'. "
+                            + "Commit it or roll it back first. The transaction is still open.",
+                            null,
+                            total.Elapsed);
+                    }
+
+                    await _session.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+                    message = $"Transaction started in database '{_session.TransactionDatabase}'. "
+                        + "The statements after it run in the transaction until COMMIT or ROLLBACK.";
+                    break;
+
+                case TransactionStatement.Commit:
+                    if (!_session.InTransaction)
+                        return QueryResultModel.Failure("No transaction is open, so there is nothing to commit.", null, total.Elapsed);
+
+                    await _session.CommitTransactionAsync().ConfigureAwait(false);
+                    message = "Transaction committed.";
+                    break;
+
+                default:
+                    if (!_session.InTransaction)
+                        return QueryResultModel.Failure("No transaction is open, so there is nothing to roll back.", null, total.Elapsed);
+
+                    await _session.RollbackTransactionAsync().ConfigureAwait(false);
+                    message = "Transaction rolled back.";
+                    break;
+            }
+
+            execute.Stop();
+            total.Stop();
+
+            return new QueryResultModel
+            {
+                Success = true,
+                IsResultSet = false,
+                ExecuteDuration = execute.Elapsed,
+                TotalDuration = total.Elapsed,
+                Message = message,
+            };
+        }
+        catch (Exception ex)
+        {
+            QueryResultModel failure = FailureOf(ex, total);
+            if (statement == TransactionStatement.Begin)
+                return failure;
+
+            return QueryResultModel.Failure(
+                failure.ErrorMessage + " The transaction is no longer open.",
+                failure.ErrorCode,
+                failure.TotalDuration);
+        }
+        finally
+        {
+            _session.TransactionGate.Release();
+        }
+    }
+
+    private static QueryResultModel FailureOf(Exception ex, Stopwatch total) => ex switch
+    {
+        OperationCanceledException => QueryResultModel.Failure("Query cancelled.", null, total.Elapsed),
+        CamusException camus => QueryResultModel.Failure(CamusSessionService.Describe(camus), camus.Code, total.Elapsed),
+        _ => QueryResultModel.Failure(ex.Message, null, total.Elapsed),
+    };
+
+    /// <summary>
+    /// Runs one statement that is not a transaction statement, with <paramref name="transaction"/> when
+    /// it is not null.
+    /// </summary>
+    private async Task<QueryResultModel> ExecuteStatementAsync(
+        string sql,
+        bool paged,
+        CamusTransaction? transaction,
+        Stopwatch total,
+        CancellationToken cancellationToken)
+    {
         try
         {
             CamusConnection connection = _session.GetConnection();
 
-            // REST admin endpoints — CREATE/DROP DATABASE are not valid SQL non-queries over REST.
+            // REST admin endpoints — CREATE/DROP DATABASE are not valid SQL non-queries over REST. They
+            // take no transaction, and RunAsync refuses them while a transaction is open.
             if (TryParseCreateDatabase(sql, out string createName, out bool ifNotExists, out string? branchFrom))
             {
                 return await ExecuteAdminAsync(
@@ -148,38 +355,42 @@ public sealed class QueryExecutionService
             }
 
             if (paged && SqlScript.IsPageableSelect(sql))
-                return await ExecutePageAsync(connection, sql.Trim(), previous: null, total, cancellationToken).ConfigureAwait(false);
+                return await ExecutePageAsync(connection, sql.Trim(), previous: null, transaction, total, cancellationToken).ConfigureAwait(false);
 
             await using CamusCommand command = connection.CreateCamusCommand(sql);
+
+            // The driver sends the transaction's identifiers with each kind of statement, DDL included.
+            // So the server decides what can run in the transaction: it refuses TRUNCATE (CADB0538), and
+            // the driver refuses it before it sends it.
+            command.Transaction = transaction;
 
             // The server runs the statement after a leading WITH clause, so that statement chooses the
             // reader and the message.
             string body = SqlScript.SkipLeadingWith(sql);
 
             if (IsResultSetStatement(body))
-                return await ExecuteReaderAsync(command, total, _session.MaxRows, writeReturning: null, explain: IsExplainStatement(body), stream: IsStreamStatement(body), cancellationToken).ConfigureAwait(false);
+            {
+                bool stream = IsStreamStatement(body);
+                return await ExecuteReaderAsync(command, total, _session.MaxRows, writeReturning: null, explain: IsExplainStatement(body), stream, readToEnd: stream && transaction is not null, cancellationToken).ConfigureAwait(false);
+            }
 
             // ExecuteNonQuery asks the server to discard the RETURNING rows, so the reader path is the
             // one that shows them.
             if (IsWriteReturning(body))
             {
                 string rowsVerb = InsertPrefix.IsMatch(body) ? "inserted" : "affected";
-                return await ExecuteReaderAsync(command, total, _session.MaxRows, writeReturning: rowsVerb, explain: false, stream: false, cancellationToken).ConfigureAwait(false);
+                return await ExecuteReaderAsync(command, total, _session.MaxRows, writeReturning: rowsVerb, explain: false, stream: false, readToEnd: false, cancellationToken).ConfigureAwait(false);
             }
 
-            return await ExecuteNonQueryAsync(command, total, cancellationToken).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            return QueryResultModel.Failure("Query cancelled.", null, total.Elapsed);
-        }
-        catch (CamusException ex)
-        {
-            return QueryResultModel.Failure(CamusSessionService.Describe(ex), ex.Code, total.Elapsed);
+            string? note = transaction is not null && SqlScript.CommitsOutsideTransaction(body)
+                ? "CamusDB commits this statement at once, also in a transaction, so a ROLLBACK does not undo it."
+                : null;
+
+            return await ExecuteNonQueryAsync(command, total, note, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            return QueryResultModel.Failure(ex.Message, null, total.Elapsed);
+            return FailureOf(ex, total);
         }
     }
 
@@ -214,6 +425,7 @@ public sealed class QueryExecutionService
         CamusConnection connection,
         string sql,
         QueryResultModel? previous,
+        CamusTransaction? transaction,
         Stopwatch total,
         CancellationToken cancellationToken)
     {
@@ -227,7 +439,8 @@ public sealed class QueryExecutionService
             return previous!;
 
         await using CamusCommand command = connection.CreateCamusCommand(SqlScript.WithPage(sql, fetch + 1, offset));
-        QueryResultModel page = await ExecuteReaderAsync(command, total, fetch, writeReturning: null, explain: false, stream: true, cancellationToken)
+        command.Transaction = transaction;
+        QueryResultModel page = await ExecuteReaderAsync(command, total, fetch, writeReturning: null, explain: false, stream: true, readToEnd: transaction is not null, cancellationToken)
             .ConfigureAwait(false);
 
         List<object?[]> rows = previous is null ? [] : [.. previous.Rows];
@@ -263,6 +476,7 @@ public sealed class QueryExecutionService
         string? writeReturning,
         bool explain,
         bool stream,
+        bool readToEnd,
         CancellationToken cancellationToken)
     {
         Stopwatch execute = Stopwatch.StartNew();
@@ -301,6 +515,13 @@ public sealed class QueryExecutionService
             if (rows.Count >= maxRows)
             {
                 truncated = true;
+
+                // In a transaction, the rows after the cap are read and dropped. A stream that the
+                // console closes before its end is a request that the client stopped, and the server
+                // rolls back the transaction of such a request.
+                if (readToEnd)
+                    continue;
+
                 break;
             }
 
@@ -367,9 +588,11 @@ public sealed class QueryExecutionService
         };
     }
 
+    /// <param name="note">A sentence that the message adds after the row count, or null.</param>
     private static async Task<QueryResultModel> ExecuteNonQueryAsync(
         CamusCommand command,
         Stopwatch total,
+        string? note,
         CancellationToken cancellationToken)
     {
         Stopwatch execute = Stopwatch.StartNew();
@@ -384,7 +607,7 @@ public sealed class QueryExecutionService
             RowsAffected = affected,
             ExecuteDuration = execute.Elapsed,
             TotalDuration = total.Elapsed,
-            Message = $"Statement completed. Rows affected: {affected}.",
+            Message = $"Statement completed. Rows affected: {affected}." + (note is null ? "" : " " + note),
         };
     }
 

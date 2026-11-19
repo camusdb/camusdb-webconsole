@@ -30,6 +30,44 @@ body has `;` in it.
   run.
 - **Stop** cancels the current statement and the statements after it.
 
+## Transactions
+
+Each statement commits by itself, unless a transaction is open. To open a transaction, run `BEGIN` or
+`START TRANSACTION`. To close it, run `COMMIT` or `ROLLBACK`, or click **Commit** or **Rollback** in
+the editor toolbar.
+
+- While a transaction is open, the toolbar shows its database and the number of statements in it.
+  The footer shows *transaction open*.
+- The transaction belongs to the session, not to a tab. Each statement that the console runs for you
+  goes in it: the statements of each tab, the data tabs, *Load more*, the row edits and deletes in the
+  grid, and the schema dialogs. The schema tree and the completion list read outside the transaction.
+- Statements of the transaction run one at a time. A statement waits while another statement of the
+  transaction runs.
+- To set the isolation level, run `SET TRANSACTION ISOLATION LEVEL …` as the first statement after
+  `BEGIN`. The console does not accept other words after `BEGIN`, `START TRANSACTION`, `COMMIT` or
+  `ROLLBACK`.
+- When a statement in the transaction fails, CamusDB rolls back the transaction. The console closes
+  the transaction, and the error message tells you. **Stop** during a statement has the same result.
+- A failed `COMMIT` also closes the transaction.
+- When the console refuses a statement before it sends it, the transaction stays open. The message
+  tells you.
+
+What CamusDB does with some statements in a transaction:
+
+| Statement | Result |
+| --- | --- |
+| `TRUNCATE`, `ALTER TABLE … REWRITE STORAGE`, `ALTER SEQUENCE … RESTART` | Refused with `CADB0538`. The transaction is rolled back. |
+| `CREATE`, `DROP`, `ALTER` or `RENAME DATABASE` | The console refuses it. |
+| Other schema DDL, such as `CREATE TABLE`, `ALTER TABLE` and `DROP TABLE`. Also users, grants and cluster settings. | Commits at once. A `ROLLBACK` does not undo it. The result message tells you. |
+| Schema DDL on a table that the transaction wrote before | The `COMMIT` fails with `CADB0502`, and the writes are lost. |
+
+- A transaction stays in one database. While it is open, the console does not switch to another
+  database, so the tree cannot open the tables of another database.
+- CamusDB rolls back a transaction that is idle for longer than its `TransactionIdleTimeoutMs`
+  setting (5 minutes by default). The next statement then fails.
+- **Connect** in the Configure dialog, sign-out and the end of the session each roll back the open
+  transaction.
+
 ## Highlighting and completion
 
 `wwwroot/js/camus-sql.js` gives highlighting and completion for CamusDB SQL. Its keyword and function

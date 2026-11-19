@@ -26,6 +26,10 @@
         {
             <text> · no auth</text>
         }
+        @if (Session.InTransaction)
+        {
+            <text> · </text><span class="footer-txn">transaction open in @Session.TransactionDatabase</span>
+        }
         @if (!Session.IsConnected && !string.IsNullOrEmpty(Session.LastError))
         {
             <text> · @Session.LastError</text>
@@ -37,9 +41,14 @@
     protected override void OnInitialized()
     {
         Session.Changed += OnSessionChanged;
+        Session.TransactionChanged += OnSessionChanged;
     }
 
     private void OnSessionChanged() => InvokeAsync(StateHasChanged);
 
-    public void Dispose() => Session.Changed -= OnSessionChanged;
+    public void Dispose()
+    {
+        Session.Changed -= OnSessionChanged;
+        Session.TransactionChanged -= OnSessionChanged;
+    }
 }

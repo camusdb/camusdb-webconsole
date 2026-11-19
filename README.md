@@ -43,7 +43,7 @@ The console opens at [http://localhost:8080](http://localhost:8080).
 | [Configuration](docs/configuration.md) | Settings, environment variables, the state that the browser keeps |
 | [Authentication](docs/authentication.md) | Sign-in with a password or a token, users and grants, error codes |
 | [Vendor launch](docs/vendor-launch.md) | Embed the console in another product under its own name |
-| [SQL editor](docs/sql-editor.md) | Run statements and scripts, completion, query history |
+| [SQL editor](docs/sql-editor.md) | Run statements and scripts, transactions, completion, query history |
 | [Results](docs/results.md) | The results grid, query plans, export |
 | [Schema browser](docs/schema-browser.md) | The schema tree, DDL dialogs, row editing |
 | [Administration](docs/administration.md) | Node stats and the other node views |

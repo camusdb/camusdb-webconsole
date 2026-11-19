@@ -124,6 +124,14 @@
                              Variant="Variant.Outlined"
                              Min="1"
                              Max="100000" />
+            @if (Session.InTransaction)
+            {
+                @* Connect opens a new connection, and a new connection cannot finish the transaction
+                   of the old one. *@
+                <MudAlert Severity="Severity.Warning" Dense="true">
+                    A transaction is open in database '@Session.TransactionDatabase'. Connect rolls it back.
+                </MudAlert>
+            }
             @if (!string.IsNullOrEmpty(_error))
             {
                 <MudAlert Severity="Severity.Error" Dense="true">@_error</MudAlert>
